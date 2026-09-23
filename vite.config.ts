@@ -1,0 +1,24 @@
+/// <reference types="vitest/config" />
+import react from '@vitejs/plugin-react'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { defineConfig } from 'vite'
+
+const root = path.dirname(fileURLToPath(import.meta.url))
+
+export default defineConfig({
+  plugins: [react()],
+  resolve: {
+    alias: {
+      math: path.resolve(root, 'vendor/jsketcher/math'),
+      gems: path.resolve(root, 'vendor/jsketcher/gems'),
+      'jsketcher/constr': path.resolve(root, 'vendor/jsketcher/constr'),
+    },
+  },
+  optimizeDeps: {
+    include: ['numeric'],
+  },
+  test: {
+    environment: 'node',
+  },
+})

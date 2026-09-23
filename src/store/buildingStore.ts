@@ -1,0 +1,1546 @@
+import { create } from 'zustand'
+import {
+  applyDragWithConstraints,
+  applyMultiDrag,
+  hasAxisConstraint,
+  hasFixedLength,
+  hasFixedPosition,
+  solveFloor,
+} from '../engine/constraints/solver'
+import {
+  addWallBetween,
+  findWallEdgeNear,
+  getOrCreateVertex,
+  hitWall,
+  mergeVertices,
+  removeVertex,
+  removeWall,
+  resolveWallEndpoint,
+  snapToGrid,
+  splitWallAt,
+} from '../engine/geometry/walls'
+import {
+  wallsShareAxis,
+  detectRooms,
+  hitRoom,
+  type WallFace,
+} from '../engine/geometry/wallSolid'
+import {
+  applyFloorCopy,
+  type CopyFloorOptions,
+} from '../engine/copyFloor'
+import {
+  type Building,
+  type Constraint,
+  createEmptyBuilding,
+  createEmptyFloor,
+  createId,
+  DEFAULT_LIGHTING,
+  ensureBuildingOpenings,
+  type Floor,
+  isGroundFloor,
+  isStoryFloor,
+  type LightingSettings,
+  type MaterialRef,
+  type OpeningKind,
+  recalcFloorElevations,
+  type SceneMode,
+  type Selection,
+  selectedVertexIds,
+  selectedWallIds,
+  storyFloors,
+  type Tool,
+  type ViewMode,
+  type WallSide,
+  isWallOpeningTool,
+  wallLength,
+} from '../engine/types'
+import {
+  createOpeningFromDrag,
+  hitOpening,
+  offsetAlongWall,
+  openingDefaults,
+  updateOpeningFields,
+} from '../engine/geometry/openings'
+import {
+  createSlabOpeningFromDrag,
+  hitSlabOpening,
+  updateSlabOpeningFields,
+} from '../engine/geometry/slabOpenings'
+
+const STORAGE_KEY = 'interior-planner-project'
+const MAX_HISTORY = 50
+
+function cloneBuilding(b: Building): Building {
+  return structuredClone(b)
+}
+
+interface BuildingState {
+  building: Building
+  activeFloorId: string
+  tool: Tool
+  viewMode: ViewMode
+  sceneMode: SceneMode
+  paintBrush: MaterialRef | null
+  lighting: LightingSettings
+  lightingMenuOpen: boolean
+  selection: Selection
+  conflict: boolean
+  wallDraftFrom: string | null
+  openingDraft: {
+    wallId: string
+    kind: OpeningKind
+    t0: number
+    t1: number
+  } | null
+  /** Drag-rect draft for stair well in the slab */
+  slabOpeningDraft: {
+    x0: number
+    y0: number
+    x1: number
+    y1: number
+  } | null
+  history: Building[]
+  future: Building[]
+  statusMessage: string | null
+
+  activeFloor: () => Floor
+  pushHistory: () => void
+  undo: () => void
+  redo: () => void
+  setTool: (tool: Tool) => void
+  setViewMode: (mode: ViewMode) => void
+  setSceneMode: (mode: SceneMode) => void
+  setPaintBrush: (brush: MaterialRef | null) => void
+  setLighting: (patch: Partial<LightingSettings>) => void
+  resetLighting: () => void
+  setLightingMenuOpen: (open: boolean) => void
+  setSelection: (sel: Selection) => void
+  /** Select a wall opening, switching active floor if needed. */
+  selectOpening: (floorId: string, id: string) => void
+  /** Select a slab opening (stair), switching active floor if needed. */
+  selectSlabOpening: (floorId: string, id: string) => void
+  setBuildingName: (name: string) => void
+
+  addFloor: (copyFromPrevious?: CopyFloorOptions | null) => void
+  copyFromPreviousFloor: (options: CopyFloorOptions) => void
+  removeFloor: (id: string) => void
+  setActiveFloor: (id: string) => void
+  renameFloor: (id: string, name: string) => void
+  setFloorHeight: (id: string, height: number) => void
+  setFloorSlabThickness: (id: string, thickness: number) => void
+  /** Absolute Y for ground or first story walking surface. */
+  setFloorElevation: (id: string, elevation: number) => void
+  setFloorVisible: (id: string, visible: boolean) => void
+
+  updateActiveFloor: (fn: (floor: Floor) => Floor, recordHistory?: boolean) => void
+
+  beginWall: (x: number, y: number) => void
+  finishWall: (x: number, y: number) => void
+  cancelWallDraft: () => void
+
+  beginOpening: (x: number, y: number) => void
+  updateOpeningDraft: (x: number, y: number) => void
+  finishOpening: () => void
+  cancelOpeningDraft: () => void
+  updateOpening: (
+    id: string,
+    patch: Partial<{
+      width: number
+      height: number
+      sillHeight: number
+      offset: number
+      kind: OpeningKind
+    }>,
+  ) => void
+  /** Move wall opening along its wall (no history — caller pushes once on drag start). */
+  dragOpening: (id: string, x: number, y: number) => void
+
+  beginSlabOpening: (x: number, y: number) => void
+  updateSlabOpeningDraft: (x: number, y: number) => void
+  finishSlabOpening: () => void
+  cancelSlabOpeningDraft: () => void
+  updateSlabOpening: (
+    id: string,
+    patch: Partial<{ x: number; y: number; width: number; depth: number }>,
+  ) => void
+  /** Move slab opening by center (no history). */
+  dragSlabOpening: (id: string, x: number, y: number) => void
+
+  selectAt: (x: number, y: number) => void
+  selectInRect: (minX: number, minY: number, maxX: number, maxY: number) => void
+  applyConstraintTool: (x: number, y: number) => void
+
+  dragVertex: (vertexId: string, x: number, y: number) => void
+  dragSelection: (
+    anchorId: string,
+    x: number,
+    y: number,
+    startPositions: Record<string, { x: number; y: number }>,
+  ) => void
+  endDrag: () => void
+
+  toggleFixedLength: (wallId: string) => void
+  toggleFixedPosition: (vertexId: string) => void
+  toggleAxis: (wallId: string, type: 'horizontal' | 'vertical') => void
+  setWallThickness: (wallId: string, thickness: number) => void
+  setWallSideMaterial: (
+    wallId: string,
+    side: WallSide,
+    material: MaterialRef | null,
+  ) => void
+  setWallBothMaterials: (
+    wallId: string,
+    material: MaterialRef | null,
+  ) => void
+  setRoomFloorMaterial: (
+    roomKey: string,
+    material: MaterialRef | null,
+  ) => void
+  setRoomWallsMaterial: (
+    roomKey: string,
+    material: MaterialRef | null,
+  ) => void
+  selectRoom: (key: string) => void
+  setFixedLengthValue: (wallId: string, length: number) => void
+  setWallDistance: (
+    wallA: string,
+    wallB: string,
+    distance: number,
+    face: WallFace,
+  ) => void
+  clearWallDistance: (wallA: string, wallB: string) => void
+  setVertexDistance: (
+    vertexA: string,
+    vertexB: string,
+    distance: number,
+    face: WallFace,
+  ) => void
+  clearVertexDistance: (vertexA: string, vertexB: string) => void
+  setPointsAligned: (
+    vertexIds: string[],
+    axis: 'horizontal' | 'vertical',
+  ) => void
+  clearPointsAligned: (
+    vertexIds: string[],
+    axis: 'horizontal' | 'vertical',
+  ) => void
+  setPointOnWall: (vertexId: string, wallId: string) => void
+  clearPointOnWall: (vertexId: string, wallId: string) => void
+  /** Alt+click mid-edge: split wall and select the junction vertex. */
+  selectEdgePoint: (x: number, y: number, shift?: boolean) => boolean
+  removeConstraint: (constraintId: string) => void
+  toggleSelectWall: (wallId: string, shift: boolean) => void
+  toggleSelectVertex: (vertexId: string, shift: boolean) => void
+  deleteSelection: () => void
+  /** Merge exactly two selected vertices into one (midpoint). */
+  mergeSelectedVertices: () => void
+
+  saveLocal: () => void
+  loadLocal: () => boolean
+  exportJson: () => string
+  importJson: (json: string) => boolean
+  newProject: () => void
+}
+
+function replaceFloor(building: Building, floor: Floor): Building {
+  return {
+    ...building,
+    floors: building.floors.map((f) => (f.id === floor.id ? floor : f)),
+  }
+}
+
+export const useBuildingStore = create<BuildingState>((set, get) => {
+  const initial = ensureBuildingOpenings(createEmptyBuilding())
+  // Demo rectangle on the first story
+  const firstStory = storyFloors(initial.floors)[0] ?? initial.floors[0]
+  const demo = seedDemoFloor(firstStory)
+  const building = {
+    ...initial,
+    floors: initial.floors.map((f) => (f.id === demo.id ? demo : f)),
+  }
+
+  return {
+    building,
+    activeFloorId: storyFloors(building.floors)[0]?.id ?? building.floors[0].id,
+    tool: 'select',
+    viewMode: '2d',
+    sceneMode: 'interior',
+    paintBrush: null,
+    lighting: { ...DEFAULT_LIGHTING },
+    lightingMenuOpen: false,
+    selection: null,
+    conflict: false,
+    wallDraftFrom: null,
+    openingDraft: null,
+    slabOpeningDraft: null,
+    history: [],
+    future: [],
+    statusMessage: null,
+
+    activeFloor: () => {
+      const { building, activeFloorId } = get()
+      return building.floors.find((f) => f.id === activeFloorId) ?? building.floors[0]
+    },
+
+    pushHistory: () => {
+      const { building, history } = get()
+      set({
+        history: [...history.slice(-(MAX_HISTORY - 1)), cloneBuilding(building)],
+        future: [],
+      })
+    },
+
+    undo: () => {
+      const { history, building, future, activeFloorId } = get()
+      if (history.length === 0) return
+      const prev = history[history.length - 1]
+      const floorExists = prev.floors.some((f) => f.id === activeFloorId)
+      set({
+        building: prev,
+        history: history.slice(0, -1),
+        future: [cloneBuilding(building), ...future].slice(0, MAX_HISTORY),
+        activeFloorId: floorExists ? activeFloorId : prev.floors[0].id,
+        conflict: false,
+        selection: null,
+        wallDraftFrom: null,
+        openingDraft: null,
+    slabOpeningDraft: null,
+      })
+    },
+
+    redo: () => {
+      const { future, building, history, activeFloorId } = get()
+      if (future.length === 0) return
+      const next = future[0]
+      const floorExists = next.floors.some((f) => f.id === activeFloorId)
+      set({
+        building: next,
+        future: future.slice(1),
+        history: [...history, cloneBuilding(building)].slice(-MAX_HISTORY),
+        activeFloorId: floorExists ? activeFloorId : next.floors[0].id,
+        conflict: false,
+        selection: null,
+        openingDraft: null,
+        slabOpeningDraft: null,
+      })
+    },
+
+    setTool: (tool) => {
+      if (isGroundFloor(get().activeFloor()) && tool !== 'select') return
+      set({
+        tool,
+        wallDraftFrom: null,
+        openingDraft: null,
+        slabOpeningDraft: null,
+        statusMessage: null,
+      })
+    },
+    setViewMode: (viewMode) => set({ viewMode }),
+    setSceneMode: (sceneMode) => set({ sceneMode }),
+    setPaintBrush: (paintBrush) => set({ paintBrush }),
+    setLighting: (patch) =>
+      set({ lighting: { ...get().lighting, ...patch } }),
+    resetLighting: () => set({ lighting: { ...DEFAULT_LIGHTING } }),
+    setLightingMenuOpen: (lightingMenuOpen) => set({ lightingMenuOpen }),
+    setSelection: (selection) => set({ selection }),
+    selectOpening: (floorId, id) =>
+      set({
+        activeFloorId: floorId,
+        selection: { kind: 'opening', id },
+        wallDraftFrom: null,
+        openingDraft: null,
+        slabOpeningDraft: null,
+        statusMessage: null,
+      }),
+    selectSlabOpening: (floorId, id) =>
+      set({
+        activeFloorId: floorId,
+        selection: { kind: 'slabOpening', id },
+        wallDraftFrom: null,
+        openingDraft: null,
+        slabOpeningDraft: null,
+        statusMessage: null,
+      }),
+    setBuildingName: (name) => {
+      get().pushHistory()
+      set({ building: { ...get().building, name } })
+    },
+
+    addFloor: (copyFromPrevious = null) => {
+      get().pushHistory()
+      const { building } = get()
+      const stories = storyFloors(building.floors)
+      const last = stories[stories.length - 1]
+      let floor = createEmptyFloor(
+        `Этаж ${stories.length + 1}`,
+        last?.elevation ?? 0,
+        last?.height ?? 2.8,
+      )
+      if (copyFromPrevious && last) {
+        floor = applyFloorCopy(floor, last, copyFromPrevious)
+      }
+      const floors = recalcFloorElevations([...building.floors, floor])
+      const created = floors[floors.length - 1]
+      set({
+        building: { ...building, floors },
+        activeFloorId: created.id,
+        selection: null,
+      })
+    },
+
+    copyFromPreviousFloor: (options) => {
+      const { building, activeFloorId } = get()
+      const stories = storyFloors(building.floors)
+      const index = stories.findIndex((f) => f.id === activeFloorId)
+      if (index <= 0) {
+        set({ statusMessage: 'Нет предыдущего этажа' })
+        return
+      }
+      const prev = stories[index - 1]
+      const current = stories[index]
+      get().pushHistory()
+      const next = applyFloorCopy(current, prev, options)
+      set({
+        building: replaceFloor(building, next),
+        selection: null,
+        statusMessage: `Скопировано с «${prev.name}»`,
+      })
+    },
+
+    removeFloor: (id) => {
+      const { building } = get()
+      const target = building.floors.find((f) => f.id === id)
+      if (!target || isGroundFloor(target)) {
+        set({ statusMessage: 'Землю удалить нельзя' })
+        return
+      }
+      if (storyFloors(building.floors).length <= 1) {
+        set({ statusMessage: 'Нужен хотя бы один этаж' })
+        return
+      }
+      get().pushHistory()
+      const floors = recalcFloorElevations(building.floors.filter((f) => f.id !== id))
+      const nextActive =
+        floors.find((f) => isStoryFloor(f))?.id ?? floors[0].id
+      set({
+        building: { ...building, floors },
+        activeFloorId: nextActive,
+        selection: null,
+      })
+    },
+
+    setActiveFloor: (id) => {
+      const floor = get().building.floors.find((f) => f.id === id)
+      set({
+        activeFloorId: id,
+        selection: null,
+        wallDraftFrom: null,
+        openingDraft: null,
+        slabOpeningDraft: null,
+        conflict: false,
+        ...(floor && isGroundFloor(floor) ? { tool: 'select' as const } : {}),
+      })
+    },
+
+    renameFloor: (id, name) => {
+      get().pushHistory()
+      const { building } = get()
+      set({
+        building: {
+          ...building,
+          floors: building.floors.map((f) => (f.id === id ? { ...f, name } : f)),
+        },
+      })
+    },
+
+    setFloorHeight: (id, height) => {
+      const floor = get().building.floors.find((f) => f.id === id)
+      if (!floor || isGroundFloor(floor)) return
+      get().pushHistory()
+      const h = Math.max(2, Math.min(5, height))
+      const floors = recalcFloorElevations(
+        get().building.floors.map((f) =>
+          f.id === id ? { ...f, height: h } : f,
+        ),
+      )
+      set({ building: { ...get().building, floors } })
+    },
+
+    setFloorSlabThickness: (id, thickness) => {
+      const floor = get().building.floors.find((f) => f.id === id)
+      if (!floor || isGroundFloor(floor)) return
+      get().pushHistory()
+      const t = Math.max(0.05, Math.min(1, thickness))
+      const floors = recalcFloorElevations(
+        get().building.floors.map((f) =>
+          f.id === id ? { ...f, slabThickness: t } : f,
+        ),
+      )
+      set({ building: { ...get().building, floors } })
+    },
+
+    setFloorElevation: (id, elevation) => {
+      const floor = get().building.floors.find((f) => f.id === id)
+      if (!floor) return
+      const elev = Math.max(-50, Math.min(100, elevation))
+      get().pushHistory()
+      if (isGroundFloor(floor)) {
+        set({
+          building: {
+            ...get().building,
+            floors: get().building.floors.map((f) =>
+              f.id === id ? { ...f, elevation: elev } : f,
+            ),
+          },
+        })
+        return
+      }
+      const stories = storyFloors(get().building.floors)
+      if (stories[0]?.id !== id) {
+        set({
+          statusMessage: 'Уровень задаётся для земли или первого этажа',
+        })
+        return
+      }
+      const floors = recalcFloorElevations(
+        get().building.floors.map((f) =>
+          f.id === id ? { ...f, elevation: elev } : f,
+        ),
+      )
+      set({ building: { ...get().building, floors } })
+    },
+
+    setFloorVisible: (id, visible) => {
+      get().pushHistory()
+      set({
+        building: {
+          ...get().building,
+          floors: get().building.floors.map((f) =>
+            f.id === id ? { ...f, visible } : f,
+          ),
+        },
+      })
+    },
+    updateActiveFloor: (fn, recordHistory = true) => {
+      if (isGroundFloor(get().activeFloor())) return
+      if (recordHistory) get().pushHistory()
+      const floor = get().activeFloor()
+      const next = fn(floor)
+      set({ building: replaceFloor(get().building, next) })
+    },
+
+    beginWall: (x, y) => {
+      if (isGroundFloor(get().activeFloor())) return
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const { floor: withV, vertex } = getOrCreateVertex(floor, x, y)
+      set({
+        building: replaceFloor(get().building, withV),
+        wallDraftFrom: vertex.id,
+        statusMessage: null,
+      })
+    },
+
+    finishWall: (x, y) => {
+      const from = get().wallDraftFrom
+      if (!from) return
+      let floor = get().activeFloor()
+      // from id may still be valid after edge splits of other walls
+      const { floor: withV, vertex, kind } = resolveWallEndpoint(floor, x, y)
+      floor = withV
+      // If draft start vertex was removed by a remap (unlikely), abort
+      if (!floor.vertices.some((v) => v.id === from)) {
+        set({ wallDraftFrom: null, statusMessage: 'Начальная точка потеряна' })
+        return
+      }
+      const next = addWallBetween(floor, from, vertex.id)
+      if (!next) {
+        set({ wallDraftFrom: null, statusMessage: 'Стена не создана' })
+        return
+      }
+      const solved = solveFloor(next)
+      const newWall = solved.floor.walls.find(
+        (w) =>
+          (w.a === from && w.b === vertex.id) ||
+          (w.b === from && w.a === vertex.id),
+      )
+      set({
+        building: replaceFloor(get().building, solved.floor),
+        wallDraftFrom: vertex.id,
+        selection: newWall ? { kind: 'wall', id: newWall.id } : null,
+        conflict: solved.conflict,
+        statusMessage:
+          kind === 'edge'
+            ? 'Стена присоединена к середине'
+            : kind === 'vertex'
+              ? 'Стена присоединена к точке'
+              : null,
+      })
+    },
+
+    cancelWallDraft: () => set({ wallDraftFrom: null }),
+
+    beginOpening: (x, y) => {
+      if (isGroundFloor(get().activeFloor())) return
+      const tool = get().tool
+      if (!isWallOpeningTool(tool)) return
+      const floor = get().activeFloor()
+      const wall = hitWall(floor, x, y, 0.3)
+      if (!wall) {
+        set({ statusMessage: 'Кликните на стену и тяните вдоль неё' })
+        return
+      }
+      const t = offsetAlongWall(floor, wall, x, y)
+      if (t == null) return
+      set({
+        openingDraft: { wallId: wall.id, kind: tool, t0: t, t1: t },
+        statusMessage: null,
+      })
+    },
+
+    updateOpeningDraft: (x, y) => {
+      const draft = get().openingDraft
+      if (!draft) return
+      const floor = get().activeFloor()
+      const wall = floor.walls.find((w) => w.id === draft.wallId)
+      if (!wall) return
+      const t = offsetAlongWall(floor, wall, x, y)
+      if (t == null) return
+      set({ openingDraft: { ...draft, t1: t } })
+    },
+
+    finishOpening: () => {
+      const draft = get().openingDraft
+      if (!draft) return
+      const floor = get().activeFloor()
+      const opening = createOpeningFromDrag(
+        floor,
+        draft.wallId,
+        draft.kind,
+        draft.t0,
+        draft.t1,
+      )
+      if (!opening) {
+        set({
+          openingDraft: null,
+          statusMessage: 'Стена слишком короткая для проёма',
+        })
+        return
+      }
+      get().pushHistory()
+      const next: Floor = {
+        ...floor,
+        openings: [...(floor.openings ?? []), opening],
+      }
+      set({
+        building: replaceFloor(get().building, next),
+        openingDraft: null,
+        selection: { kind: 'opening', id: opening.id },
+        statusMessage: null,
+      })
+    },
+
+    cancelOpeningDraft: () => set({ openingDraft: null }),
+
+    beginSlabOpening: (x, y) => {
+      if (isGroundFloor(get().activeFloor())) return
+      if (get().tool !== 'stair') return
+      set({
+        slabOpeningDraft: { x0: x, y0: y, x1: x, y1: y },
+        statusMessage: null,
+      })
+    },
+
+    updateSlabOpeningDraft: (x, y) => {
+      const draft = get().slabOpeningDraft
+      if (!draft) return
+      set({ slabOpeningDraft: { ...draft, x1: x, y1: y } })
+    },
+
+    finishSlabOpening: () => {
+      const draft = get().slabOpeningDraft
+      if (!draft) return
+      const opening = createSlabOpeningFromDrag(
+        draft.x0,
+        draft.y0,
+        draft.x1,
+        draft.y1,
+        'stair',
+      )
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const next: Floor = {
+        ...floor,
+        slabOpenings: [...(floor.slabOpenings ?? []), opening],
+      }
+      set({
+        building: replaceFloor(get().building, next),
+        slabOpeningDraft: null,
+        selection: { kind: 'slabOpening', id: opening.id },
+        statusMessage: null,
+      })
+    },
+
+    cancelSlabOpeningDraft: () => set({ slabOpeningDraft: null }),
+
+    updateSlabOpening: (id, patch) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const next = updateSlabOpeningFields(floor, id, patch)
+      set({ building: replaceFloor(get().building, next) })
+    },
+
+    dragSlabOpening: (id, x, y) => {
+      const floor = get().activeFloor()
+      const next = updateSlabOpeningFields(floor, id, { x, y })
+      set({
+        building: replaceFloor(get().building, next),
+        selection: { kind: 'slabOpening', id },
+      })
+    },
+
+    updateOpening: (id, patch) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      let nextPatch = { ...patch }
+      if (patch.kind) {
+        const existing = (floor.openings ?? []).find((o) => o.id === id)
+        if (existing && existing.kind !== patch.kind) {
+          const defs = openingDefaults(patch.kind, floor.height)
+          nextPatch = {
+            ...nextPatch,
+            height: defs.height,
+            sillHeight: defs.sillHeight,
+          }
+        }
+      }
+      const next = updateOpeningFields(floor, id, nextPatch)
+      set({ building: replaceFloor(get().building, next) })
+    },
+
+    dragOpening: (id, x, y) => {
+      const floor = get().activeFloor()
+      const opening = (floor.openings ?? []).find((o) => o.id === id)
+      if (!opening) return
+      const wall = floor.walls.find((w) => w.id === opening.wallId)
+      if (!wall) return
+      const t = offsetAlongWall(floor, wall, x, y)
+      if (t == null) return
+      const next = updateOpeningFields(floor, id, { offset: t })
+      set({
+        building: replaceFloor(get().building, next),
+        selection: { kind: 'opening', id },
+      })
+    },
+
+    selectAt: (x, y) => {
+      const floor = get().activeFloor()
+      const vertex = floor.vertices.find((v) => Math.hypot(v.x - x, v.y - y) <= 0.2)
+      if (vertex) {
+        set({ selection: { kind: 'vertex', id: vertex.id } })
+        return
+      }
+      const slab = hitSlabOpening(floor, x, y)
+      if (slab) {
+        set({ selection: { kind: 'slabOpening', id: slab.id } })
+        return
+      }
+      const opening = hitOpening(floor, x, y)
+      if (opening) {
+        set({ selection: { kind: 'opening', id: opening.id } })
+        return
+      }
+      const wall = hitWall(floor, x, y)
+      if (wall) {
+        set({ selection: { kind: 'wall', id: wall.id } })
+        return
+      }
+      const room = hitRoom(floor, x, y)
+      if (room) {
+        set({ selection: { kind: 'room', key: room.key } })
+        return
+      }
+      set({ selection: null })
+    },
+
+    selectInRect: (minX, minY, maxX, maxY) => {
+      const floor = get().activeFloor()
+      const x0 = Math.min(minX, maxX)
+      const x1 = Math.max(minX, maxX)
+      const y0 = Math.min(minY, maxY)
+      const y1 = Math.max(minY, maxY)
+      const vertexIds = floor.vertices
+        .filter((v) => v.x >= x0 && v.x <= x1 && v.y >= y0 && v.y <= y1)
+        .map((v) => v.id)
+      if (vertexIds.length === 0) {
+        set({ selection: null })
+        return
+      }
+      const idSet = new Set(vertexIds)
+      const wallIds = floor.walls
+        .filter((w) => idSet.has(w.a) && idSet.has(w.b))
+        .map((w) => w.id)
+      if (vertexIds.length === 1 && wallIds.length === 0) {
+        set({ selection: { kind: 'vertex', id: vertexIds[0] } })
+        return
+      }
+      set({ selection: { kind: 'multi', vertexIds, wallIds } })
+    },
+
+    applyConstraintTool: (x, y) => {
+      const tool = get().tool
+      const floor = get().activeFloor()
+
+      if (tool === 'lockPoint') {
+        const vertex = floor.vertices.find((v) => Math.hypot(v.x - x, v.y - y) <= 0.25)
+        if (!vertex) return
+        get().toggleFixedPosition(vertex.id)
+        set({ selection: { kind: 'vertex', id: vertex.id } })
+        return
+      }
+
+      const wall = hitWall(floor, x, y, 0.25)
+      if (!wall) return
+      set({ selection: { kind: 'wall', id: wall.id } })
+      if (tool === 'lockLength') get().toggleFixedLength(wall.id)
+      if (tool === 'horizontal') get().toggleAxis(wall.id, 'horizontal')
+      if (tool === 'vertical') get().toggleAxis(wall.id, 'vertical')
+    },
+
+    dragVertex: (vertexId, x, y) => {
+      const floor = get().activeFloor()
+      if (hasFixedPosition(floor.constraints, vertexId)) {
+        set({ conflict: true, statusMessage: 'Вершина закреплена' })
+        return
+      }
+      const result = applyDragWithConstraints(
+        floor,
+        vertexId,
+        snapToGrid(x, 0.05),
+        snapToGrid(y, 0.05),
+      )
+      set({
+        building: replaceFloor(get().building, result.floor),
+        conflict: result.conflict,
+        statusMessage: result.conflict ? 'Конфликт ограничений' : null,
+      })
+    },
+
+    dragSelection: (anchorId, x, y, startPositions) => {
+      const floor = get().activeFloor()
+      const start = startPositions[anchorId]
+      if (!start) return
+      const dx = snapToGrid(x, 0.05) - start.x
+      const dy = snapToGrid(y, 0.05) - start.y
+      const targets: Array<{ vertexId: string; x: number; y: number }> = []
+      for (const [id, pos] of Object.entries(startPositions)) {
+        if (hasFixedPosition(floor.constraints, id)) continue
+        targets.push({ vertexId: id, x: pos.x + dx, y: pos.y + dy })
+      }
+      if (targets.length === 0) return
+      const result = applyMultiDrag(floor, targets)
+      set({
+        building: replaceFloor(get().building, result.floor),
+        conflict: result.conflict,
+        statusMessage: result.conflict ? 'Конфликт ограничений' : null,
+      })
+    },
+
+    endDrag: () => {
+      const floor = get().activeFloor()
+      const snapped: Floor = {
+        ...floor,
+        vertices: floor.vertices.map((v) => ({
+          ...v,
+          x: snapToGrid(v.x, 0.05),
+          y: snapToGrid(v.y, 0.05),
+        })),
+      }
+      // Re-solve so length constraints snap exactly after drag
+      const solved = solveFloor(snapped, { rough: false })
+      set({
+        building: replaceFloor(get().building, solved.floor),
+        conflict: solved.conflict,
+        statusMessage: solved.conflict ? 'Конфликт ограничений' : null,
+      })
+    },
+
+    toggleFixedLength: (wallId) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const wall = floor.walls.find((w) => w.id === wallId)
+      if (!wall) return
+      let constraints: Constraint[]
+      if (hasFixedLength(floor.constraints, wallId)) {
+        constraints = floor.constraints.filter(
+          (c) => !(c.type === 'fixedLength' && c.wallId === wallId),
+        )
+      } else {
+        const length = wallLength(floor, wall)
+        constraints = [
+          ...floor.constraints,
+          {
+            id: createId('c'),
+            type: 'fixedLength',
+            wallId,
+            length,
+          },
+        ]
+      }
+      const solved = solveFloor({ ...floor, constraints })
+      set({
+        building: replaceFloor(get().building, solved.floor),
+        conflict: solved.conflict,
+        statusMessage: solved.conflict ? 'Конфликт ограничений' : null,
+      })
+    },
+
+    toggleFixedPosition: (vertexId) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      let constraints: Constraint[]
+      if (hasFixedPosition(floor.constraints, vertexId)) {
+        constraints = floor.constraints.filter(
+          (c) => !(c.type === 'fixedPosition' && c.vertexId === vertexId),
+        )
+      } else {
+        constraints = [
+          ...floor.constraints,
+          {
+            id: createId('c'),
+            type: 'fixedPosition',
+            vertexId,
+          },
+        ]
+      }
+      const solved = solveFloor({ ...floor, constraints })
+      set({
+        building: replaceFloor(get().building, solved.floor),
+        conflict: solved.conflict,
+        statusMessage: solved.conflict ? 'Конфликт ограничений' : null,
+      })
+    },
+
+    toggleAxis: (wallId, type) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const opposite = type === 'horizontal' ? 'vertical' : 'horizontal'
+      let constraints = floor.constraints.filter(
+        (c) => !(c.type === opposite && c.wallId === wallId),
+      )
+      if (hasAxisConstraint(constraints, wallId, type)) {
+        constraints = constraints.filter((c) => !(c.type === type && c.wallId === wallId))
+      } else {
+        constraints = [...constraints, { id: createId('c'), type, wallId }]
+      }
+      const solved = solveFloor({ ...floor, constraints })
+      set({
+        building: replaceFloor(get().building, solved.floor),
+        conflict: solved.conflict,
+        statusMessage: solved.conflict ? 'Конфликт ограничений' : null,
+      })
+    },
+
+    setWallThickness: (wallId, thickness) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const next = {
+        ...floor,
+        walls: floor.walls.map((w) =>
+          w.id === wallId ? { ...w, thickness: Math.max(0.1, Math.min(0.6, thickness)) } : w,
+        ),
+      }
+      // Thickness changes face↔center mapping for distance constraints
+      const needsSolve = next.constraints.some(
+        (c) => c.type === 'wallDistance' || c.type === 'vertexDistance',
+      )
+      if (needsSolve) {
+        const solved = solveFloor(next)
+        set({
+          building: replaceFloor(get().building, solved.floor),
+          conflict: solved.conflict,
+          statusMessage: solved.conflict ? 'Конфликт ограничений' : null,
+        })
+      } else {
+        set({ building: replaceFloor(get().building, next) })
+      }
+    },
+
+    setWallSideMaterial: (wallId, side, material) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const next = {
+        ...floor,
+        walls: floor.walls.map((w) => {
+          if (w.id !== wallId) return w
+          const materials = { ...w.materials }
+          if (material == null) {
+            delete materials[side]
+          } else {
+            materials[side] = material
+          }
+          const hasAny =
+            materials.pos != null || materials.neg != null
+          return {
+            ...w,
+            materials: hasAny ? materials : undefined,
+          }
+        }),
+      }
+      set({ building: replaceFloor(get().building, next) })
+    },
+
+    setWallBothMaterials: (wallId, material) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const next = {
+        ...floor,
+        walls: floor.walls.map((w) => {
+          if (w.id !== wallId) return w
+          if (material == null) {
+            return { ...w, materials: undefined }
+          }
+          return {
+            ...w,
+            materials: { pos: material, neg: material },
+          }
+        }),
+      }
+      set({ building: replaceFloor(get().building, next) })
+    },
+
+    setRoomFloorMaterial: (roomKey, material) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const map = { ...(floor.roomFloorMaterials ?? {}) }
+      if (material == null) {
+        delete map[roomKey]
+      } else {
+        map[roomKey] = material
+      }
+      const next = {
+        ...floor,
+        roomFloorMaterials:
+          Object.keys(map).length > 0 ? map : undefined,
+      }
+      set({ building: replaceFloor(get().building, next) })
+    },
+
+    setRoomWallsMaterial: (roomKey, material) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const room = detectRooms(floor).find((r) => r.key === roomKey)
+      if (!room) return
+      const sideByWall = new Map(
+        room.edges.map((e) => [e.wallId, e.side] as const),
+      )
+      const next = {
+        ...floor,
+        walls: floor.walls.map((w) => {
+          const side = sideByWall.get(w.id)
+          if (!side) return w
+          const materials = { ...w.materials }
+          if (material == null) {
+            delete materials[side]
+          } else {
+            materials[side] = material
+          }
+          const hasAny =
+            materials.pos != null || materials.neg != null
+          return {
+            ...w,
+            materials: hasAny ? materials : undefined,
+          }
+        }),
+      }
+      set({ building: replaceFloor(get().building, next) })
+    },
+
+    selectRoom: (key) => {
+      set({ selection: { kind: 'room', key } })
+    },
+
+    setFixedLengthValue: (wallId, length) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const L = Math.max(0.5, length)
+      let constraints = floor.constraints.map((c) =>
+        c.type === 'fixedLength' && c.wallId === wallId ? { ...c, length: L } : c,
+      )
+      if (!hasFixedLength(constraints, wallId)) {
+        constraints = [
+          ...constraints,
+          { id: createId('c'), type: 'fixedLength', wallId, length: L },
+        ]
+      }
+      const solved = solveFloor({ ...floor, constraints })
+      set({
+        building: replaceFloor(get().building, solved.floor),
+        conflict: solved.conflict,
+        statusMessage: solved.conflict ? 'Конфликт ограничений' : null,
+      })
+    },
+
+    setWallDistance: (wallA, wallB, distance, face) => {
+      const floor = get().activeFloor()
+      const axis = wallsShareAxis(floor, wallA, wallB)
+      if (!axis) {
+        set({
+          statusMessage:
+            'Обе стены должны быть горизонтальными или обе вертикальными',
+        })
+        return
+      }
+      get().pushHistory()
+      const D = Math.max(0.05, distance)
+      let constraints = floor.constraints.filter(
+        (c) =>
+          !(
+            c.type === 'wallDistance' &&
+            ((c.wallA === wallA && c.wallB === wallB) ||
+              (c.wallA === wallB && c.wallB === wallA))
+          ),
+      )
+      constraints = [
+        ...constraints,
+        {
+          id: createId('c'),
+          type: 'wallDistance',
+          wallA,
+          wallB,
+          distance: D,
+          face,
+        },
+      ]
+      const solved = solveFloor({ ...floor, constraints })
+      set({
+        building: replaceFloor(get().building, solved.floor),
+        conflict: solved.conflict,
+        statusMessage: solved.conflict
+          ? 'Конфликт ограничений'
+          : `Расстояние (${face}): ${D.toFixed(2)} м`,
+      })
+    },
+
+    clearWallDistance: (wallA, wallB) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      set({
+        building: replaceFloor(get().building, {
+          ...floor,
+          constraints: floor.constraints.filter(
+            (c) =>
+              !(
+                c.type === 'wallDistance' &&
+                ((c.wallA === wallA && c.wallB === wallB) ||
+                  (c.wallA === wallB && c.wallB === wallA))
+              ),
+          ),
+        }),
+      })
+    },
+
+    setVertexDistance: (vertexA, vertexB, distance, face) => {
+      if (vertexA === vertexB) return
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const D = Math.max(0.05, distance)
+      let constraints = floor.constraints.filter(
+        (c) =>
+          !(
+            c.type === 'vertexDistance' &&
+            ((c.vertexA === vertexA && c.vertexB === vertexB) ||
+              (c.vertexA === vertexB && c.vertexB === vertexA))
+          ),
+      )
+      constraints = [
+        ...constraints,
+        {
+          id: createId('c'),
+          type: 'vertexDistance',
+          vertexA,
+          vertexB,
+          distance: D,
+          face,
+        },
+      ]
+      const solved = solveFloor({ ...floor, constraints })
+      set({
+        building: replaceFloor(get().building, solved.floor),
+        conflict: solved.conflict,
+        statusMessage: solved.conflict
+          ? 'Конфликт ограничений'
+          : `Расстояние точек (${face}): ${D.toFixed(2)} м`,
+      })
+    },
+
+    clearVertexDistance: (vertexA, vertexB) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      set({
+        building: replaceFloor(get().building, {
+          ...floor,
+          constraints: floor.constraints.filter(
+            (c) =>
+              !(
+                c.type === 'vertexDistance' &&
+                ((c.vertexA === vertexA && c.vertexB === vertexB) ||
+                  (c.vertexA === vertexB && c.vertexB === vertexA))
+              ),
+          ),
+        }),
+      })
+    },
+
+    setPointsAligned: (vertexIds, axis) => {
+      const unique = [...new Set(vertexIds)]
+      if (unique.length < 2) return
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const type = axis === 'horizontal' ? 'pointsHorizontal' : 'pointsVertical'
+      const opposite =
+        axis === 'horizontal' ? 'pointsVertical' : 'pointsHorizontal'
+      // Drop opposite align on the same set; replace same-type match
+      let constraints = floor.constraints.filter(
+        (c) =>
+          !(
+            (c.type === type || c.type === opposite) &&
+            c.vertexIds.length === unique.length &&
+            unique.every((id) => c.vertexIds.includes(id))
+          ),
+      )
+      constraints = [
+        ...constraints,
+        { id: createId('c'), type, vertexIds: unique },
+      ]
+      const solved = solveFloor({ ...floor, constraints })
+      set({
+        building: replaceFloor(get().building, solved.floor),
+        conflict: solved.conflict,
+        statusMessage: solved.conflict
+          ? 'Конфликт ограничений'
+          : axis === 'horizontal'
+            ? 'Точки на одной горизонтали'
+            : 'Точки на одной вертикали',
+      })
+    },
+
+    clearPointsAligned: (vertexIds, axis) => {
+      const unique = [...new Set(vertexIds)]
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const type = axis === 'horizontal' ? 'pointsHorizontal' : 'pointsVertical'
+      const solved = solveFloor({
+        ...floor,
+        constraints: floor.constraints.filter(
+          (c) =>
+            !(
+              c.type === type &&
+              c.vertexIds.length === unique.length &&
+              unique.every((id) => c.vertexIds.includes(id))
+            ),
+        ),
+      })
+      set({
+        building: replaceFloor(get().building, solved.floor),
+        conflict: solved.conflict,
+        statusMessage: null,
+      })
+    },
+
+    setPointOnWall: (vertexId, wallId) => {
+      const floor = get().activeFloor()
+      const wall = floor.walls.find((w) => w.id === wallId)
+      const vertex = floor.vertices.find((v) => v.id === vertexId)
+      if (!wall || !vertex) return
+      if (wall.a === vertexId || wall.b === vertexId) {
+        set({
+          statusMessage: 'Точка уже является концом этой стены',
+        })
+        return
+      }
+      get().pushHistory()
+      let constraints = floor.constraints.filter(
+        (c) =>
+          !(
+            c.type === 'pointOnWall' &&
+            c.vertexId === vertexId &&
+            c.wallId === wallId
+          ),
+      )
+      constraints = [
+        ...constraints,
+        { id: createId('c'), type: 'pointOnWall', vertexId, wallId },
+      ]
+      const solved = solveFloor({ ...floor, constraints })
+      set({
+        building: replaceFloor(get().building, solved.floor),
+        conflict: solved.conflict,
+        statusMessage: solved.conflict
+          ? 'Конфликт ограничений'
+          : 'Точка прикреплена к стене',
+        selection: {
+          kind: 'multi',
+          vertexIds: [vertexId],
+          wallIds: [wallId],
+        },
+      })
+    },
+
+    clearPointOnWall: (vertexId, wallId) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      set({
+        building: replaceFloor(get().building, {
+          ...floor,
+          constraints: floor.constraints.filter(
+            (c) =>
+              !(
+                c.type === 'pointOnWall' &&
+                c.vertexId === vertexId &&
+                c.wallId === wallId
+              ),
+          ),
+        }),
+        statusMessage: null,
+      })
+    },
+
+    selectEdgePoint: (x, y, shift = false) => {
+      const floor = get().activeFloor()
+      const edge = findWallEdgeNear(floor, x, y)
+      if (!edge) return false
+      const split = splitWallAt(floor, edge.wall.id, edge.x, edge.y)
+      if (!split) return false
+      get().pushHistory()
+      set({
+        building: replaceFloor(get().building, split.floor),
+        statusMessage: 'Точка на ребре выделена',
+      })
+      get().toggleSelectVertex(split.vertex.id, shift)
+      return true
+    },
+
+    removeConstraint: (constraintId) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const constraints = floor.constraints.filter((c) => c.id !== constraintId)
+      const solved = solveFloor({ ...floor, constraints })
+      set({
+        building: replaceFloor(get().building, solved.floor),
+        conflict: solved.conflict,
+        statusMessage: null,
+      })
+    },
+
+    toggleSelectWall: (wallId, shift) => {
+      const { selection } = get()
+      if (!shift) {
+        set({ selection: { kind: 'wall', id: wallId } })
+        return
+      }
+      const verts = new Set(
+        selection
+          ? selection.kind === 'vertex'
+            ? [selection.id]
+            : selection.kind === 'multi'
+              ? selection.vertexIds
+              : []
+          : [],
+      )
+      const walls = new Set(selectedWallIds(selection))
+      if (walls.has(wallId)) walls.delete(wallId)
+      else walls.add(wallId)
+      const vertexIds = [...verts]
+      const wallIds = [...walls]
+      if (wallIds.length === 0 && vertexIds.length === 0) {
+        set({ selection: null })
+      } else if (wallIds.length === 1 && vertexIds.length === 0) {
+        set({ selection: { kind: 'wall', id: wallIds[0] } })
+      } else if (wallIds.length === 0 && vertexIds.length === 1) {
+        set({ selection: { kind: 'vertex', id: vertexIds[0] } })
+      } else {
+        set({ selection: { kind: 'multi', vertexIds, wallIds } })
+      }
+    },
+
+    toggleSelectVertex: (vertexId, shift) => {
+      const { selection } = get()
+      if (!shift) {
+        set({ selection: { kind: 'vertex', id: vertexId } })
+        return
+      }
+      const verts = new Set(
+        selection
+          ? selection.kind === 'vertex'
+            ? [selection.id]
+            : selection.kind === 'multi'
+              ? [...selection.vertexIds]
+              : []
+          : [],
+      )
+      const walls = new Set(selectedWallIds(selection))
+      if (verts.has(vertexId)) verts.delete(vertexId)
+      else verts.add(vertexId)
+      const vertexIds = [...verts]
+      const wallIds = [...walls]
+      if (vertexIds.length === 0 && wallIds.length === 0) {
+        set({ selection: null })
+      } else if (vertexIds.length === 1 && wallIds.length === 0) {
+        set({ selection: { kind: 'vertex', id: vertexIds[0] } })
+      } else if (vertexIds.length === 0 && wallIds.length === 1) {
+        set({ selection: { kind: 'wall', id: wallIds[0] } })
+      } else {
+        set({ selection: { kind: 'multi', vertexIds, wallIds } })
+      }
+    },
+
+    deleteSelection: () => {
+      const { selection } = get()
+      if (!selection) return
+      get().pushHistory()
+      let floor = get().activeFloor()
+      if (selection.kind === 'opening') {
+        floor = {
+          ...floor,
+          openings: (floor.openings ?? []).filter((o) => o.id !== selection.id),
+        }
+      } else if (selection.kind === 'slabOpening') {
+        floor = {
+          ...floor,
+          slabOpenings: (floor.slabOpenings ?? []).filter(
+            (o) => o.id !== selection.id,
+          ),
+        }
+      } else if (selection.kind === 'wall') {
+        floor = removeWall(floor, selection.id)
+      } else if (selection.kind === 'vertex') {
+        floor = removeVertex(floor, selection.id)
+      } else if (selection.kind === 'multi') {
+        for (const wid of selection.wallIds) {
+          floor = removeWall(floor, wid)
+        }
+        for (const vid of selection.vertexIds) {
+          floor = removeVertex(floor, vid)
+        }
+      }
+      set({
+        building: replaceFloor(get().building, floor),
+        selection: null,
+      })
+    },
+
+    mergeSelectedVertices: () => {
+      const ids = selectedVertexIds(get().selection)
+      if (ids.length !== 2) {
+        set({
+          statusMessage: 'Выделите ровно 2 точки (Shift+клик)',
+        })
+        return
+      }
+      const [idA, idB] = ids
+      const floor0 = get().activeFloor()
+      if (
+        !floor0.vertices.some((v) => v.id === idA) ||
+        !floor0.vertices.some((v) => v.id === idB)
+      ) {
+        set({ statusMessage: 'Точки не найдены' })
+        return
+      }
+      const degree = (id: string) =>
+        floor0.walls.filter((w) => w.a === id || w.b === id).length
+      const keepId = degree(idA) >= degree(idB) ? idA : idB
+      const removeId = keepId === idA ? idB : idA
+
+      get().pushHistory()
+      const merged = mergeVertices(floor0, keepId, removeId, {
+        position: 'mid',
+      })
+      const solved = solveFloor(merged)
+      set({
+        building: replaceFloor(get().building, solved.floor),
+        selection: { kind: 'vertex', id: keepId },
+        conflict: solved.conflict,
+        statusMessage: solved.conflict
+          ? 'Точки слиты, но есть конфликт ограничений'
+          : 'Точки слиты в одну',
+      })
+    },
+
+    saveLocal: () => {
+      localStorage.setItem(STORAGE_KEY, get().exportJson())
+      set({ statusMessage: 'Сохранено в браузере' })
+    },
+
+    loadLocal: () => {
+      const raw = localStorage.getItem(STORAGE_KEY)
+      if (!raw) {
+        set({ statusMessage: 'Нет сохранённого проекта' })
+        return false
+      }
+      return get().importJson(raw)
+    },
+
+    exportJson: () => JSON.stringify(get().building, null, 2),
+
+    importJson: (json) => {
+      try {
+        const data = ensureBuildingOpenings(JSON.parse(json) as Building)
+        if (!data.floors?.length) throw new Error('invalid')
+        get().pushHistory()
+        set({
+          building: data,
+          activeFloorId:
+            storyFloors(data.floors)[0]?.id ?? data.floors[0].id,
+          selection: null,
+          conflict: false,
+          openingDraft: null,
+          slabOpeningDraft: null,
+          statusMessage: 'Проект загружен',
+        })
+        return true
+      } catch {
+        set({ statusMessage: 'Ошибка загрузки JSON' })
+        return false
+      }
+    },
+
+    newProject: () => {
+      get().pushHistory()
+      const b = createEmptyBuilding()
+      set({
+        building: b,
+        activeFloorId: storyFloors(b.floors)[0]?.id ?? b.floors[0].id,
+        selection: null,
+        conflict: false,
+        statusMessage: 'Новый проект',
+      })
+    },
+  }
+})
+
+function seedDemoFloor(floor: Floor): Floor {
+  const v1 = { id: createId('v'), x: 0, y: 0 }
+  const v2 = { id: createId('v'), x: 6, y: 0 }
+  const v3 = { id: createId('v'), x: 6, y: 4 }
+  const v4 = { id: createId('v'), x: 0, y: 4 }
+  const w1 = { id: createId('wall'), a: v1.id, b: v2.id, thickness: 0.2 }
+  const w2 = { id: createId('wall'), a: v2.id, b: v3.id, thickness: 0.2 }
+  const w3 = { id: createId('wall'), a: v3.id, b: v4.id, thickness: 0.2 }
+  const w4 = { id: createId('wall'), a: v4.id, b: v1.id, thickness: 0.2 }
+  return {
+    ...floor,
+    vertices: [v1, v2, v3, v4],
+    walls: [w1, w2, w3, w4],
+    openings: [],
+    slabOpenings: [],
+    constraints: [
+      { id: createId('c'), type: 'fixedLength', wallId: w1.id, length: 6 },
+      { id: createId('c'), type: 'fixedLength', wallId: w2.id, length: 4 },
+      { id: createId('c'), type: 'fixedLength', wallId: w3.id, length: 6 },
+      { id: createId('c'), type: 'fixedLength', wallId: w4.id, length: 4 },
+      { id: createId('c'), type: 'fixedPosition', vertexId: v1.id },
+    ],
+  }
+}
