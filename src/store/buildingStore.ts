@@ -189,6 +189,10 @@ interface BuildingState {
     side: WallSide,
     material: MaterialRef | null,
   ) => void
+  setWallCutMaterial: (
+    wallId: string,
+    material: MaterialRef | null,
+  ) => void
   setWallBothMaterials: (
     wallId: string,
     material: MaterialRef | null,
@@ -199,6 +203,10 @@ interface BuildingState {
   ) => void
   setRoomWallsMaterial: (
     roomKey: string,
+    material: MaterialRef | null,
+  ) => void
+  setSlabOpeningMaterial: (
+    openingId: string,
     material: MaterialRef | null,
   ) => void
   selectRoom: (key: string) => void
@@ -981,7 +989,35 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
             materials[side] = material
           }
           const hasAny =
-            materials.pos != null || materials.neg != null
+            materials.pos != null ||
+            materials.neg != null ||
+            materials.cut != null
+          return {
+            ...w,
+            materials: hasAny ? materials : undefined,
+          }
+        }),
+      }
+      set({ building: replaceFloor(get().building, next) })
+    },
+
+    setWallCutMaterial: (wallId, material) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const next = {
+        ...floor,
+        walls: floor.walls.map((w) => {
+          if (w.id !== wallId) return w
+          const materials = { ...w.materials }
+          if (material == null) {
+            delete materials.cut
+          } else {
+            materials.cut = material
+          }
+          const hasAny =
+            materials.pos != null ||
+            materials.neg != null ||
+            materials.cut != null
           return {
             ...w,
             materials: hasAny ? materials : undefined,
@@ -999,11 +1035,22 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         walls: floor.walls.map((w) => {
           if (w.id !== wallId) return w
           if (material == null) {
-            return { ...w, materials: undefined }
+            const materials = { ...w.materials }
+            delete materials.pos
+            delete materials.neg
+            const hasAny = materials.cut != null
+            return {
+              ...w,
+              materials: hasAny ? materials : undefined,
+            }
           }
           return {
             ...w,
-            materials: { pos: material, neg: material },
+            materials: {
+              ...w.materials,
+              pos: material,
+              neg: material,
+            },
           }
         }),
       }
@@ -1047,11 +1094,30 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
             materials[side] = material
           }
           const hasAny =
-            materials.pos != null || materials.neg != null
+            materials.pos != null ||
+            materials.neg != null ||
+            materials.cut != null
           return {
             ...w,
             materials: hasAny ? materials : undefined,
           }
+        }),
+      }
+      set({ building: replaceFloor(get().building, next) })
+    },
+
+    setSlabOpeningMaterial: (openingId, material) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const next = {
+        ...floor,
+        slabOpenings: (floor.slabOpenings ?? []).map((o) => {
+          if (o.id !== openingId) return o
+          if (material == null) {
+            const { material: _drop, ...rest } = o
+            return rest
+          }
+          return { ...o, material }
         }),
       }
       set({ building: replaceFloor(get().building, next) })

@@ -13,8 +13,13 @@ import {
   wallFaceHitInOpening,
 } from '../../engine/geometry/wallFaces'
 import {
+  buildSlabOpeningCutGeometry,
+  buildWallCutPaintHitGeometry,
+} from '../../engine/geometry/wallCuts'
+import {
   isStoryFloor,
   type Floor,
+  type SlabOpening,
   type Wall,
   type WallSide,
 } from '../../engine/types'
@@ -190,8 +195,148 @@ function PaintFloorRegion({
   )
 }
 
+function PaintWallCut({
+  floorId,
+  wall,
+  floor,
+  hasFinish,
+}: {
+  floorId: string
+  wall: Wall
+  floor: Floor
+  hasFinish: boolean
+}) {
+  const paintBrush = useBuildingStore((s) => s.paintBrush)
+  const setWallCutMaterial = useBuildingStore((s) => s.setWallCutMaterial)
+  const setSelection = useBuildingStore((s) => s.setSelection)
+  const setActiveFloor = useBuildingStore((s) => s.setActiveFloor)
+  const [hovered, setHovered] = useState(false)
+
+  const geometry = useMemo(
+    () => buildWallCutPaintHitGeometry(floor, wall),
+    [floor, wall],
+  )
+
+  useEffect(() => {
+    return () => {
+      geometry?.dispose()
+    }
+  }, [geometry])
+
+  if (!geometry) return null
+
+  return (
+    <mesh
+      geometry={geometry}
+      onClick={(e: ThreeEvent<MouseEvent>) => {
+        e.stopPropagation()
+        setActiveFloor(floorId)
+        setSelection({ kind: 'wall', id: wall.id })
+        if (!paintBrush && !e.altKey) return
+        setWallCutMaterial(wall.id, e.altKey ? null : paintBrush)
+      }}
+      onPointerOver={(e) => {
+        e.stopPropagation()
+        setHovered(true)
+        document.body.style.cursor = paintBrush || e.altKey ? 'crosshair' : 'pointer'
+      }}
+      onPointerOut={() => {
+        setHovered(false)
+        document.body.style.cursor = 'default'
+      }}
+      userData={{ wallId: wall.id, paintTarget: true, paintKind: 'wall-cut' }}
+      renderOrder={11}
+    >
+      <meshBasicMaterial
+        transparent
+        opacity={hasFinish ? (hovered ? 0.14 : 0) : hovered ? 0.3 : 0.14}
+        color={hovered ? HOVER : '#d4c4a8'}
+        depthWrite={false}
+        side={THREE.FrontSide}
+        polygonOffset
+        polygonOffsetFactor={-4}
+        polygonOffsetUnits={-4}
+      />
+      {hovered && <Edges threshold={15} color={HOVER} scale={1.002} />}
+    </mesh>
+  )
+}
+
+function PaintSlabCut({
+  floorId,
+  opening,
+  floor,
+  hasFinish,
+}: {
+  floorId: string
+  opening: SlabOpening
+  floor: Floor
+  hasFinish: boolean
+}) {
+  const paintBrush = useBuildingStore((s) => s.paintBrush)
+  const setSlabOpeningMaterial = useBuildingStore(
+    (s) => s.setSlabOpeningMaterial,
+  )
+  const setSelection = useBuildingStore((s) => s.setSelection)
+  const setActiveFloor = useBuildingStore((s) => s.setActiveFloor)
+  const [hovered, setHovered] = useState(false)
+
+  const geometry = useMemo(
+    () => buildSlabOpeningCutGeometry(floor, opening),
+    [floor, opening],
+  )
+
+  useEffect(() => {
+    return () => {
+      geometry?.dispose()
+    }
+  }, [geometry])
+
+  if (!geometry) return null
+
+  return (
+    <mesh
+      geometry={geometry}
+      onClick={(e: ThreeEvent<MouseEvent>) => {
+        e.stopPropagation()
+        setActiveFloor(floorId)
+        setSelection({ kind: 'slabOpening', id: opening.id })
+        if (!paintBrush && !e.altKey) return
+        setSlabOpeningMaterial(opening.id, e.altKey ? null : paintBrush)
+      }}
+      onPointerOver={(e) => {
+        e.stopPropagation()
+        setHovered(true)
+        document.body.style.cursor = paintBrush || e.altKey ? 'crosshair' : 'pointer'
+      }}
+      onPointerOut={() => {
+        setHovered(false)
+        document.body.style.cursor = 'default'
+      }}
+      userData={{
+        slabOpeningId: opening.id,
+        paintTarget: true,
+        paintKind: 'slab-cut',
+      }}
+      renderOrder={11}
+    >
+      <meshBasicMaterial
+        transparent
+        opacity={hasFinish ? (hovered ? 0.14 : 0) : hovered ? 0.3 : 0.14}
+        color={hovered ? HOVER : '#d4c4a8'}
+        depthWrite={false}
+        side={THREE.FrontSide}
+        polygonOffset
+        polygonOffsetFactor={-4}
+        polygonOffsetUnits={-4}
+      />
+      {hovered && <Edges threshold={15} color={HOVER} scale={1.002} />}
+    </mesh>
+  )
+}
+
 /**
- * Paint hit targets: wall side planes + one mesh per enclosed floor region
+ * Paint hit targets: wall side planes + cut faces + one mesh per enclosed floor region
  * (rooms + wall-union holes that weren't detected as rooms).
  */
 export function PaintPickables({ floorId }: { floorId: string }) {
@@ -218,6 +363,24 @@ export function PaintPickables({ floorId }: { floorId: string }) {
       }
     }
     return items
+  }, [floor])
+
+  const wallCutItems = useMemo(() => {
+    if (!floor || !isStoryFloor(floor)) return []
+    return floor.walls.map((wall) => ({
+      key: `${wall.id}-cut`,
+      wall,
+      hasFinish: !!wall.materials?.cut,
+    }))
+  }, [floor])
+
+  const slabCutItems = useMemo(() => {
+    if (!floor || !isStoryFloor(floor)) return []
+    return (floor.slabOpenings ?? []).map((opening) => ({
+      key: `${opening.id}-cut`,
+      opening,
+      hasFinish: !!opening.material,
+    }))
   }, [floor])
 
   const floorRegions = useMemo(() => {
@@ -272,6 +435,24 @@ export function PaintPickables({ floorId }: { floorId: string }) {
           floor={floor}
           wall={item.wall}
           side={item.side}
+          hasFinish={item.hasFinish}
+        />
+      ))}
+      {wallCutItems.map((item) => (
+        <PaintWallCut
+          key={item.key}
+          floorId={floorId}
+          floor={floor}
+          wall={item.wall}
+          hasFinish={item.hasFinish}
+        />
+      ))}
+      {slabCutItems.map((item) => (
+        <PaintSlabCut
+          key={item.key}
+          floorId={floorId}
+          floor={floor}
+          opening={item.opening}
           hasFinish={item.hasFinish}
         />
       ))}

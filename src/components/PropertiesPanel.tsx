@@ -35,6 +35,7 @@ export function PropertiesPanel() {
   const toggleAxis = useBuildingStore((s) => s.toggleAxis)
   const setWallThickness = useBuildingStore((s) => s.setWallThickness)
   const setWallSideMaterial = useBuildingStore((s) => s.setWallSideMaterial)
+  const setWallCutMaterial = useBuildingStore((s) => s.setWallCutMaterial)
   const setWallBothMaterials = useBuildingStore((s) => s.setWallBothMaterials)
   const setRoomFloorMaterial = useBuildingStore((s) => s.setRoomFloorMaterial)
   const setRoomWallsMaterial = useBuildingStore((s) => s.setRoomWallsMaterial)
@@ -55,6 +56,7 @@ export function PropertiesPanel() {
   const setBuildingName = useBuildingStore((s) => s.setBuildingName)
   const updateOpening = useBuildingStore((s) => s.updateOpening)
   const updateSlabOpening = useBuildingStore((s) => s.updateSlabOpening)
+  const setSlabOpeningMaterial = useBuildingStore((s) => s.setSlabOpeningMaterial)
   const copyFromPreviousFloor = useBuildingStore((s) => s.copyFromPreviousFloor)
   const conflict = useBuildingStore((s) => s.conflict)
   const statusMessage = useBuildingStore((s) => s.statusMessage)
@@ -354,6 +356,12 @@ export function PropertiesPanel() {
               }
             />
           </label>
+          <MaterialSlot
+            label="Срезы (стенки выреза)"
+            value={slabOpening.material}
+            onChange={(ref) => setSlabOpeningMaterial(slabOpening.id, ref)}
+            onClear={() => setSlabOpeningMaterial(slabOpening.id, null)}
+          />
         </section>
       )}
 
@@ -535,6 +543,15 @@ export function PropertiesPanel() {
             onChange={(ref) => setWallSideMaterial(wall.id, 'neg', ref)}
             onClear={() => setWallSideMaterial(wall.id, 'neg', null)}
           />
+          <MaterialSlot
+            label="Срезы (торцы и проёмы)"
+            value={wall.materials?.cut}
+            onChange={(ref) => setWallCutMaterial(wall.id, ref)}
+            onClear={() => setWallCutMaterial(wall.id, null)}
+          />
+          <p className="muted">
+            Срезы — свободные торцы стены и грани вырезов (дверь, окно, проём).
+          </p>
         </section>
       )}
 

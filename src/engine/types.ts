@@ -22,6 +22,11 @@ export interface WallMaterials {
   pos?: MaterialRef | null
   /** Side toward −normal (right of a→b). */
   neg?: MaterialRef | null
+  /**
+   * Cut faces: free wall ends and opening reveals
+   * (jambs / sill / head for door, window, passage).
+   */
+  cut?: MaterialRef | null
 }
 
 export interface Wall {
@@ -108,6 +113,8 @@ export interface SlabOpening {
   y: number
   width: number
   depth: number
+  /** Finish on vertical faces of the slab well (stair cut). */
+  material?: MaterialRef | null
 }
 
 /** Terrain level vs. a normal story with walls/slab. */
@@ -200,9 +207,9 @@ export const DEFAULT_LIGHTING: LightingSettings = {
   shadowsEnabled: true,
   contactShadows: true,
   exposure: 1.05,
-  aoIntensity: 1.35,
-  bloomIntensity: 0.35,
-  vignetteDarkness: 0.4,
+  aoIntensity: 1.2,
+  bloomIntensity: 0.25,
+  vignetteDarkness: 0.35,
   skyColor: '#c8d9e8',
   groundColor: '#8a7a65',
 }

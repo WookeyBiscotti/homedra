@@ -1,6 +1,8 @@
 import { Canvas, useThree } from '@react-three/fiber'
 import {
   ContactShadows,
+  Environment,
+  Lightformer,
   OrbitControls,
   Sky,
 } from '@react-three/drei'
@@ -23,10 +25,13 @@ import {
   buildRoomFloorGeometry,
   buildWallFaceGeometry,
 } from '../../engine/geometry/wallFaces'
+import {
+  buildSlabOpeningCutGeometry,
+  buildWallCutGeometry,
+} from '../../engine/geometry/wallCuts'
 import { isStoryFloor, sunDirection, type MaterialRef, type WallSide } from '../../engine/types'
 import { useBuildingStore } from '../../store/buildingStore'
 import * as THREE from 'three'
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { LightingPanel } from './LightingPanel'
 import { OpeningPickables } from './OpeningPickables'
@@ -36,50 +41,73 @@ import { PbrStandardMaterial } from './PbrStandardMaterial'
 import { VisitControls } from './VisitControls'
 import { WallPickables } from './WallPickables'
 
-/** Local IBL — no CDN HDR fetch (Environment presets can white-screen on fail). */
-function LocalEnvironment({ intensity = 0.45 }: { intensity?: number }) {
-  const { gl, scene } = useThree()
-  useEffect(() => {
-    const pmrem = new THREE.PMREMGenerator(gl)
-    pmrem.compileEquirectangularShader()
-    const room = new RoomEnvironment()
-    const envMap = pmrem.fromScene(room, 0.04).texture
-    const prevEnv = scene.environment
-    const prevIntensity = scene.environmentIntensity
-    scene.environment = envMap
-    scene.environmentIntensity = intensity
-    room.dispose()
-    return () => {
-      scene.environment = prevEnv
-      scene.environmentIntensity = prevIntensity
-      envMap.dispose()
-      pmrem.dispose()
-    }
-    // Bake once — intensity updates below without remount/flash.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
-  }, [gl, scene])
-
-  useEffect(() => {
-    scene.environmentIntensity = intensity
-  }, [scene, intensity])
-
-  return null
+/**
+ * Procedural IBL via Lightformers (no CDN HDR).
+ * Remount only when sky/ground tint changes; intensity updates live.
+ */
+function LocalEnvironment({
+  intensity,
+  skyColor,
+  groundColor,
+}: {
+  intensity: number
+  skyColor: string
+  groundColor: string
+}) {
+  return (
+    <Environment
+      key={`${skyColor}-${groundColor}`}
+      resolution={256}
+      environmentIntensity={Math.max(0, intensity)}
+      frames={1}
+    >
+      <Lightformer
+        form="circle"
+        intensity={2}
+        color={skyColor}
+        position={[0, 10, 0]}
+        scale={14}
+      />
+      <Lightformer
+        form="rect"
+        intensity={2.8}
+        color="#fff4e0"
+        position={[8, 10, 6]}
+        scale={[4, 4, 1]}
+        target={[0, 0, 0]}
+      />
+      <Lightformer
+        form="ring"
+        intensity={0.45}
+        color={skyColor}
+        position={[0, 3, -8]}
+        scale={10}
+      />
+      <Lightformer
+        form="rect"
+        intensity={0.3}
+        color={groundColor}
+        position={[0, -5, 0]}
+        scale={[16, 16, 1]}
+        rotation={[Math.PI / 2, 0, 0]}
+      />
+    </Environment>
+  )
 }
 
-/** Sky mesh must not feed N8AO / HDR bloom (causes black NaN flashes). */
+/** Exclude sky from N8AO (avoids rings / black artefacts). */
 function SceneSky({ sunPosition }: { sunPosition: [number, number, number] }) {
-  const ref = useRef<THREE.Mesh>(null)
+  const ref = useRef<THREE.Object3D>(null)
   useEffect(() => {
     const sky = ref.current
     if (!sky) return
-    sky.userData.contributeToAO = false
     sky.traverse((o) => {
       o.userData.contributeToAO = false
     })
   }, [])
   return (
     <Sky
-      ref={ref}
+      ref={ref as never}
       distance={450000}
       sunPosition={sunPosition}
       turbidity={4.5}
@@ -90,6 +118,13 @@ function SceneSky({ sunPosition }: { sunPosition: [number, number, number] }) {
   )
 }
 
+/**
+ * Stable post stack:
+ * - N8AO halfRes=false (halfRes paints depth=1 / sky black — n8ao#51)
+ * - Bloom without mipmapBlur (HDR sky + mipmapBlur → NaN black patches)
+ * - ToneMapping in-chain (composer forces NoToneMapping on renderer)
+ * Soft PCSS removed — shader-chunk patch broke WebGL materials (error 1282).
+ */
 function PostFx({
   exposure,
   aoIntensity,
@@ -101,7 +136,6 @@ function PostFx({
   bloomIntensity: number
   vignetteDarkness: number
 }) {
-  // EffectComposer forces NoToneMapping — map exposure via brightness.
   const brightness = (exposure - 1) * 0.35
   return (
     <EffectComposer
@@ -110,25 +144,21 @@ function PostFx({
       frameBufferType={THREE.HalfFloatType}
     >
       <N8AO
-        quality="performance"
+        quality="medium"
         aoRadius={0.5}
         distanceFalloff={1}
-        intensity={aoIntensity}
-        halfRes
-        enabled={aoIntensity > 0.01}
+        intensity={Math.max(0, aoIntensity)}
+        halfRes={false}
       />
       <Bloom
-        luminanceThreshold={1.1}
+        luminanceThreshold={1.25}
         luminanceSmoothing={0.4}
-        intensity={bloomIntensity > 0.01 ? bloomIntensity : 0}
-        radius={0.35}
+        intensity={Math.max(0, bloomIntensity)}
+        radius={0.4}
       />
       <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
       <BrightnessContrast brightness={brightness} contrast={0} />
-      <Vignette
-        offset={0.28}
-        darkness={vignetteDarkness > 0.01 ? vignetteDarkness : 0}
-      />
+      <Vignette offset={0.28} darkness={Math.max(0, vignetteDarkness)} />
       <SMAA />
     </EffectComposer>
   )
@@ -315,6 +345,70 @@ function WallFaceMesh({
   )
 }
 
+function WallCutMesh({
+  floorId,
+  wallId,
+  geometry,
+  material,
+  selected,
+  dimmed,
+}: {
+  floorId: string
+  wallId: string
+  geometry: THREE.BufferGeometry
+  material?: MaterialRef | null
+  selected: boolean
+  dimmed: boolean
+}) {
+  const sceneMode = useBuildingStore((s) => s.sceneMode)
+  const setSelection = useBuildingStore((s) => s.setSelection)
+  const setActiveFloor = useBuildingStore((s) => s.setActiveFloor)
+  const painting = sceneMode === 'paint'
+
+  const onClick = (e: ThreeEvent<MouseEvent>) => {
+    e.stopPropagation()
+    setActiveFloor(floorId)
+    setSelection({ kind: 'wall', id: wallId })
+  }
+
+  return (
+    <mesh
+      geometry={geometry}
+      raycast={painting ? disableRaycast : undefined}
+      onClick={painting ? undefined : onClick}
+      onPointerOver={
+        painting
+          ? undefined
+          : (e) => {
+              e.stopPropagation()
+              document.body.style.cursor = 'pointer'
+            }
+      }
+      onPointerOut={
+        painting
+          ? undefined
+          : () => {
+              document.body.style.cursor = 'default'
+            }
+      }
+      userData={{ wallId, paintKind: 'wall-cut' }}
+      renderOrder={3}
+    >
+      <PbrStandardMaterial
+        material={material}
+        color={selected ? '#e8d4b8' : '#d4c4a8'}
+        transparent={dimmed}
+        opacity={dimmed ? 0.4 : 1}
+        side={THREE.FrontSide}
+        meterUvs
+        polygonOffset
+        polygonOffsetFactor={-1}
+        polygonOffsetUnits={-1}
+      />
+    </mesh>
+  )
+}
+
 function FloorFinishes({
   floorId,
   activeFloorId,
@@ -364,6 +458,54 @@ function FloorFinishes({
     return items
   }, [floor])
 
+  const wallCuts = useMemo(() => {
+    if (!floor || !isStoryFloor(floor)) return []
+    const items: Array<{
+      key: string
+      wallId: string
+      geo: THREE.BufferGeometry
+      material: NonNullable<
+        NonNullable<(typeof floor.walls)[0]['materials']>['cut']
+      >
+    }> = []
+    for (const wall of floor.walls) {
+      const mat = wall.materials?.cut
+      if (!mat) continue
+      const geo = buildWallCutGeometry(floor, wall)
+      if (!geo) continue
+      items.push({
+        key: `${wall.id}-cut`,
+        wallId: wall.id,
+        geo,
+        material: mat,
+      })
+    }
+    return items
+  }, [floor])
+
+  const slabCuts = useMemo(() => {
+    if (!floor || !isStoryFloor(floor)) return []
+    const items: Array<{
+      key: string
+      openingId: string
+      geo: THREE.BufferGeometry
+      material: NonNullable<(typeof floor.slabOpenings)[0]['material']>
+    }> = []
+    for (const opening of floor.slabOpenings ?? []) {
+      const mat = opening.material
+      if (!mat) continue
+      const geo = buildSlabOpeningCutGeometry(floor, opening)
+      if (!geo) continue
+      items.push({
+        key: `${opening.id}-cut`,
+        openingId: opening.id,
+        geo,
+        material: mat,
+      })
+    }
+    return items
+  }, [floor])
+
   const roomFloors = useMemo(() => {
     if (!floor || !isStoryFloor(floor)) return []
     const regions = floorPaintRegions(floor)
@@ -388,9 +530,11 @@ function FloorFinishes({
   useEffect(() => {
     return () => {
       for (const item of wallFaces) item.geo.dispose()
+      for (const item of wallCuts) item.geo.dispose()
+      for (const item of slabCuts) item.geo.dispose()
       for (const item of roomFloors) item.geo.dispose()
     }
-  }, [wallFaces, roomFloors])
+  }, [wallFaces, wallCuts, slabCuts, roomFloors])
 
   if (!floor) return null
   const isActive = floorId === activeFloorId
@@ -411,6 +555,69 @@ function FloorFinishes({
           }
           dimmed={dimmed}
         />
+      ))}
+      {wallCuts.map((item) => (
+        <WallCutMesh
+          key={item.key}
+          floorId={floorId}
+          wallId={item.wallId}
+          geometry={item.geo}
+          material={item.material}
+          selected={
+            selection?.kind === 'wall' && selection.id === item.wallId
+          }
+          dimmed={dimmed}
+        />
+      ))}
+      {slabCuts.map((item) => (
+        <mesh
+          key={item.key}
+          geometry={item.geo}
+          raycast={painting ? disableRaycast : undefined}
+          onClick={
+            painting
+              ? undefined
+              : (e: ThreeEvent<MouseEvent>) => {
+                  e.stopPropagation()
+                  setActiveFloor(floorId)
+                  setSelection({ kind: 'slabOpening', id: item.openingId })
+                }
+          }
+          onPointerOver={
+            painting
+              ? undefined
+              : (e) => {
+                  e.stopPropagation()
+                  document.body.style.cursor = 'pointer'
+                }
+          }
+          onPointerOut={
+            painting
+              ? undefined
+              : () => {
+                  document.body.style.cursor = 'default'
+                }
+          }
+          userData={{ slabOpeningId: item.openingId, paintKind: 'slab-cut' }}
+          renderOrder={3}
+        >
+          <PbrStandardMaterial
+            material={item.material}
+            color={
+              selection?.kind === 'slabOpening' &&
+              selection.id === item.openingId
+                ? '#e8d4b8'
+                : '#d4c4a8'
+            }
+            transparent={dimmed}
+            opacity={dimmed ? 0.4 : 1}
+            side={THREE.FrontSide}
+            meterUvs
+            polygonOffset
+            polygonOffsetFactor={-1}
+            polygonOffsetUnits={-1}
+          />
+        </mesh>
       ))}
       {roomFloors.map(({ key, geo, mat }) => (
         <mesh
@@ -694,9 +901,9 @@ function SunLight({
 function ToneMappingSetup({ exposure }: { exposure: number }) {
   const gl = useThree((s) => s.gl)
   useEffect(() => {
-    // EffectComposer owns tone mapping; keep exposure for materials / fallback.
+    // Composer owns final tone mapping; keep exposure for materials / fallback.
     gl.toneMappingExposure = exposure
-    gl.shadowMap.type = THREE.PCFShadowMap
+    gl.shadowMap.type = THREE.PCFSoftShadowMap
   }, [gl, exposure])
   return null
 }
@@ -810,7 +1017,11 @@ function SceneContent({
         args={[lighting.skyColor, lighting.groundColor, lighting.ambientIntensity]}
       />
       <ambientLight intensity={lighting.ambientIntensity * 0.25} color="#e8eef4" />
-      <LocalEnvironment intensity={lighting.ambientIntensity} />
+      <LocalEnvironment
+        intensity={lighting.ambientIntensity}
+        skyColor={lighting.skyColor}
+        groundColor={lighting.groundColor}
+      />
 
       <SunLight
         position={sunPosition}
@@ -843,7 +1054,7 @@ function SceneContent({
           scale={groundSize}
           blur={2.4}
           far={10}
-          resolution={256}
+          resolution={512}
           frames={1}
           color="#2a241c"
         />

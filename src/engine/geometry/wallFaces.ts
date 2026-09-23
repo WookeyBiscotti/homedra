@@ -55,7 +55,7 @@ export function buildWallFaceGeometry(
 ): THREE.BufferGeometry | null {
   const frame = wallFaceFrame(floor, wall, side)
   if (!frame) return null
-  const { ax, az, bx, bz, len, ux, uz, wnx, wnz } = frame
+  const { ax, az, len, ux, uz, wnx, wnz } = frame
 
   const openings = openingsForWall(floor, wall.id)
   // Opening offsets are along the centerline; scale onto the mitered face length.
