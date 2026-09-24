@@ -24,6 +24,11 @@ export const UI_ICONS = {
   redo: publicUrl('icons/ui/redo.svg'),
   delete: publicUrl('icons/tools/delete.svg'),
   merge: publicUrl('icons/tools/merge.svg'),
+  visibility: {
+    solid: publicUrl('icons/ui/visibility-solid.svg'),
+    ghost: publicUrl('icons/ui/visibility-ghost.svg'),
+    hidden: publicUrl('icons/ui/visibility-hidden.svg'),
+  },
   workbench: {
     draft: publicUrl('icons/ui/workbench-draft.svg'),
     paint: publicUrl('icons/ui/workbench-paint.svg'),

@@ -2,7 +2,12 @@ import { Edges } from '@react-three/drei'
 import type { ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
 import { wallEndpoints } from '../../engine/geometry/openings'
-import { isOpeningSelected, isSlabOpeningSelected } from '../../engine/types'
+import {
+  isFloorRendered,
+  isOpeningSelected,
+  isSlabOpeningSelected,
+  normalizeFloorVisibility,
+} from '../../engine/types'
 import { useBuildingStore } from '../../store/buildingStore'
 
 const SELECTED = '#c45c26'
@@ -154,7 +159,7 @@ export function OpeningPickables({ showSlabs }: { showSlabs: boolean }) {
     <group>
       {building.floors.map((floor) => {
         if (floor.kind === 'ground') return null
-        if (floor.visible === false) return null
+        if (!isFloorRendered(normalizeFloorVisibility(floor.visible))) return null
         const dimmed = floor.id !== activeFloorId
         return (
           <group key={floor.id}>

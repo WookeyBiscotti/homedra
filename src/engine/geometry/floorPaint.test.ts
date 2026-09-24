@@ -10,7 +10,7 @@ function twoRoomFloor(): Floor {
     elevation: -2.5,
     height: 2.8,
     slabThickness: 0.2,
-    visible: true,
+    visible: 'solid',
     vertices: [
       { id: 'v1', x: 0, y: 0 },
       { id: 'v2', x: 3, y: 0 },

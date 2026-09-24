@@ -18,7 +18,7 @@ function rectangleFloor(): Floor {
     elevation: 0,
     height: 2.8,
     slabThickness: 0.2,
-    visible: true,
+    visible: 'solid',
     vertices: [v1, v2, v3, v4],
     walls: [w1, w2, w3, w4],
     openings: [],
@@ -233,7 +233,7 @@ describe('mitered wall footprints', () => {
       elevation: 0,
       height: 2.8,
       slabThickness: 0.2,
-    visible: true,
+    visible: 'solid',
       vertices: [
         { id: 'v0', x: 0, y: 0 },
         { id: 'v1', x: 5, y: 0 },
@@ -282,7 +282,7 @@ describe('mitered wall footprints', () => {
       elevation: 0,
       height: 2.8,
       slabThickness: 0.2,
-    visible: true,
+    visible: 'solid',
       vertices: [
         { id: 'v0', x: 0, y: 0 },
         { id: 'v1', x: 4, y: 0 },

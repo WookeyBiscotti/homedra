@@ -1,14 +1,33 @@
 import { useState } from 'react'
 import type { CopyFloorOptions } from '../engine/copyFloor'
-import { isGroundFloor, isStoryFloor } from '../engine/types'
+import {
+  type FloorVisibility,
+  isFloorRendered,
+  isGroundFloor,
+  isStoryFloor,
+  normalizeFloorVisibility,
+} from '../engine/types'
 import { useBuildingStore } from '../store/buildingStore'
 import { CopyFloorOptionsForm } from './CopyFloorOptionsForm'
+import { IconImg, UI_ICONS } from './icons'
+
+const VISIBILITY_LABEL: Record<FloorVisibility, string> = {
+  solid: 'Полностью виден в 3D',
+  ghost: 'Виден с прозрачностью в 3D',
+  hidden: 'Скрыт в 3D',
+}
+
+const VISIBILITY_ACTION: Record<FloorVisibility, string> = {
+  solid: 'Сделать полупрозрачным',
+  ghost: 'Скрыть в 3D',
+  hidden: 'Показать полностью',
+}
 
 export function FloorTabs() {
   const floors = useBuildingStore((s) => s.building.floors)
   const activeFloorId = useBuildingStore((s) => s.activeFloorId)
   const setActiveFloor = useBuildingStore((s) => s.setActiveFloor)
-  const setFloorVisible = useBuildingStore((s) => s.setFloorVisible)
+  const cycleFloorVisible = useBuildingStore((s) => s.cycleFloorVisible)
   const addFloor = useBuildingStore((s) => s.addFloor)
   const removeFloor = useBuildingStore((s) => s.removeFloor)
   const [showCopyDialog, setShowCopyDialog] = useState(false)
@@ -32,27 +51,39 @@ export function FloorTabs() {
     <div className="floor-tabs">
       {floors.map((f) => {
         const ground = isGroundFloor(f)
-        const visible = f.visible !== false
+        const visibility = normalizeFloorVisibility(f.visible)
+        const rendered = isFloorRendered(visibility)
         return (
           <button
             key={f.id}
             type="button"
-            className={`floor-tab ${f.id === activeFloorId ? 'active' : ''} ${ground ? 'ground' : ''} ${visible ? '' : 'hidden-floor'}`}
+            className={`floor-tab ${f.id === activeFloorId ? 'active' : ''} ${ground ? 'ground' : ''} ${rendered ? '' : 'hidden-floor'} ${visibility === 'ghost' ? 'ghost-floor' : ''}`}
             onClick={() => setActiveFloor(f.id)}
-            title={visible ? 'Этаж виден в 3D' : 'Этаж скрыт в 3D'}
+            title={VISIBILITY_LABEL[visibility]}
           >
-            <input
-              type="checkbox"
+            <span
               className="floor-vis"
-              checked={visible}
-              title={visible ? 'Скрыть в 3D' : 'Показать в 3D'}
-              aria-label={visible ? `Скрыть «${f.name}»` : `Показать «${f.name}»`}
-              onClick={(e) => e.stopPropagation()}
-              onChange={(e) => {
+              role="button"
+              tabIndex={0}
+              title={VISIBILITY_ACTION[visibility]}
+              aria-label={`${VISIBILITY_ACTION[visibility]}: «${f.name}»`}
+              onClick={(e) => {
                 e.stopPropagation()
-                setFloorVisible(f.id, e.target.checked)
+                cycleFloorVisible(f.id)
               }}
-            />
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  cycleFloorVisible(f.id)
+                }
+              }}
+            >
+              <IconImg
+                src={UI_ICONS.visibility[visibility]}
+                className="ui-icon floor-vis-icon"
+              />
+            </span>
             <span className="floor-tab-name">{f.name}</span>
             {!ground && stories.length > 1 && (
               <span

@@ -10,7 +10,7 @@ function floor(partial: Partial<Floor> & Pick<Floor, 'walls' | 'vertices'>): Flo
     elevation: 0,
     height: 2.7,
     slabThickness: 0.2,
-    visible: true,
+    visible: 'solid',
     constraints: [],
     openings: [],
     slabOpenings: [],

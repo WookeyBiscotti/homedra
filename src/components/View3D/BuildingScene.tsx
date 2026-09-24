@@ -29,7 +29,15 @@ import {
   buildSlabOpeningCutGeometry,
   buildWallCutGeometry,
 } from '../../engine/geometry/wallCuts'
-import { isStoryFloor, sunDirection, type MaterialRef, type WallSide } from '../../engine/types'
+import {
+  isFloorRendered,
+  isStoryFloor,
+  normalizeFloorVisibility,
+  sunDirection,
+  type FloorVisibility,
+  type MaterialRef,
+  type WallSide,
+} from '../../engine/types'
 import { useBuildingStore } from '../../store/buildingStore'
 import * as THREE from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
@@ -37,7 +45,7 @@ import { LightingPanel } from './LightingPanel'
 import { OpeningPickables } from './OpeningPickables'
 import { PaintPickables, disableRaycast } from './PaintPickables'
 import { PbrStandardMaterial } from './PbrStandardMaterial'
-import { VisitControls } from './VisitControls'
+import { VisitControls, type VisitActiveState } from './VisitControls'
 import { WallPickables } from './WallPickables'
 import { PlaceObjectFloorHit, PlacedObjects } from './PlacedObjects'
 
@@ -152,6 +160,7 @@ function FloorWallSolidMesh({
   activeFloorId,
   exterior,
   shadowsEnabled,
+  ghost = false,
   pickable = true,
 }: {
   floorId: string
@@ -164,6 +173,7 @@ function FloorWallSolidMesh({
   activeFloorId: string
   exterior: boolean
   shadowsEnabled: boolean
+  ghost?: boolean
   pickable?: boolean
 }) {
   const geometry = useMemo(() => {
@@ -213,7 +223,7 @@ function FloorWallSolidMesh({
   }, [geometry])
 
   const isActive = floorId === activeFloorId
-  const opacity = exterior ? 1 : isActive ? 0.92 : 0.35
+  const opacity = ghost ? 0.28 : 1
   const color = exterior
     ? isActive
       ? '#6b8f71'
@@ -227,14 +237,15 @@ function FloorWallSolidMesh({
   return (
     <mesh
       geometry={geometry}
-      castShadow={shadowsEnabled}
-      receiveShadow={shadowsEnabled}
+      castShadow={shadowsEnabled && !ghost}
+      receiveShadow={shadowsEnabled && !ghost}
       raycast={pickable ? undefined : disableRaycast}
     >
       <meshStandardMaterial
         color={color}
-        transparent={!exterior && !isActive}
+        transparent={ghost}
         opacity={opacity}
+        depthWrite={!ghost}
         roughness={0.78}
         metalness={0.04}
         envMapIntensity={0.35}
@@ -385,14 +396,12 @@ function WallCutMesh({
 
 function FloorFinishes({
   floorId,
-  activeFloorId,
   shadowsEnabled,
-  exterior,
+  ghost = false,
 }: {
   floorId: string
-  activeFloorId: string
   shadowsEnabled: boolean
-  exterior: boolean
+  ghost?: boolean
 }) {
   const floor = useBuildingStore((s) =>
     s.building.floors.find((f) => f.id === floorId),
@@ -516,8 +525,7 @@ function FloorFinishes({
   }, [wallFaces, wallCuts, slabCuts, roomFloors])
 
   if (!floor) return null
-  const isActive = floorId === activeFloorId
-  const dimmed = !exterior && !isActive
+  const dimmed = ghost
 
   return (
     <>
@@ -648,13 +656,13 @@ function FloorSlabs({
   slabs,
   activeFloorId,
   shadowsEnabled,
-  exterior,
+  visibilityByFloor,
   pickable = true,
 }: {
   slabs: ReturnType<typeof extrudeBuilding>['slabs']
   activeFloorId: string
   shadowsEnabled: boolean
-  exterior: boolean
+  visibilityByFloor: Map<string, FloorVisibility>
   pickable?: boolean
 }) {
   return (
@@ -669,7 +677,7 @@ function FloorSlabs({
             thickness={slab.thickness}
             activeFloorId={activeFloorId}
             shadowsEnabled={shadowsEnabled}
-            exterior={exterior}
+            ghost={visibilityByFloor.get(slab.floorId) === 'ghost'}
             pickable={pickable}
           />
         )),
@@ -685,7 +693,7 @@ function FloorSlabRegionMesh({
   thickness,
   activeFloorId,
   shadowsEnabled,
-  exterior,
+  ghost = false,
   pickable = true,
 }: {
   floorId: string
@@ -697,7 +705,7 @@ function FloorSlabRegionMesh({
   thickness: number
   activeFloorId: string
   shadowsEnabled: boolean
-  exterior: boolean
+  ghost?: boolean
   pickable?: boolean
 }) {
   const geometry = useMemo(() => {
@@ -744,19 +752,19 @@ function FloorSlabRegionMesh({
   if (!geometry) return null
 
   const isActive = floorId === activeFloorId
-  const opaque = exterior || isActive
+  const opaque = !ghost
   return (
     <mesh
       geometry={geometry}
-      receiveShadow={shadowsEnabled}
-      castShadow={shadowsEnabled}
+      receiveShadow={shadowsEnabled && opaque}
+      castShadow={shadowsEnabled && opaque}
       raycast={pickable ? undefined : disableRaycast}
       renderOrder={1}
     >
       <meshStandardMaterial
         color={isActive ? '#e8dfd0' : '#cfc3b0'}
         transparent={!opaque}
-        opacity={opaque ? 1 : 0.55}
+        opacity={opaque ? 1 : 0.28}
         roughness={0.92}
         metalness={0}
         side={THREE.DoubleSide}
@@ -904,9 +912,9 @@ function OrbitCameraReset({ center }: { center: [number, number, number] }) {
 }
 
 function SceneContent({
-  onVisitLockChange,
+  onVisitActiveChange,
 }: {
-  onVisitLockChange?: (locked: boolean) => void
+  onVisitActiveChange?: (state: VisitActiveState) => void
 }) {
   const building = useBuildingStore((s) => s.building)
   const activeFloorId = useBuildingStore((s) => s.activeFloorId)
@@ -930,13 +938,21 @@ function SceneContent({
     () => buildingFootprintHoles(building),
     [building],
   )
+  const visibilityByFloor = useMemo(() => {
+    const map = new Map<string, FloorVisibility>()
+    for (const f of building.floors) {
+      map.set(f.id, normalizeFloorVisibility(f.visible))
+    }
+    return map
+  }, [building.floors])
+
   const visibleFloorIds = useMemo(() => {
     const ids = new Set<string>()
-    for (const f of building.floors) {
-      if (f.visible !== false) ids.add(f.id)
+    for (const [id, vis] of visibilityByFloor) {
+      if (isFloorRendered(vis)) ids.add(id)
     }
     return ids
-  }, [building.floors])
+  }, [visibilityByFloor])
 
   const visibleFloors = useMemo(
     () => floors.filter((f) => visibleFloorIds.has(f.floorId)),
@@ -950,7 +966,9 @@ function SceneContent({
   const activeFloor = building.floors.find((f) => f.id === activeFloorId)
   const groundFloor = building.floors.find((f) => f.kind === 'ground')
   const groundY = groundFloor?.elevation ?? 0
-  const groundVisible = groundFloor?.visible !== false
+  const groundVisible = isFloorRendered(
+    normalizeFloorVisibility(groundFloor?.visible),
+  )
   const floorY = activeFloor?.kind === 'ground'
     ? groundY
     : (activeFloor?.elevation ?? groundY)
@@ -1046,6 +1064,7 @@ function SceneContent({
       <group>
         {visibleFloors.map((f) => {
           const floorData = building.floors.find((fl) => fl.id === f.floorId)
+          const ghost = visibilityByFloor.get(f.floorId) === 'ghost'
           return (
           <group key={f.floorId}>
             <FloorWallSolidMesh
@@ -1054,13 +1073,13 @@ function SceneContent({
               activeFloorId={activeFloorId}
               exterior={finishExterior}
               shadowsEnabled={lighting.shadowsEnabled}
+              ghost={ghost}
               pickable={!painting && !placing}
             />
             <FloorFinishes
               floorId={f.floorId}
-              activeFloorId={activeFloorId}
               shadowsEnabled={lighting.shadowsEnabled}
-              exterior={finishExterior}
+              ghost={ghost}
             />
             {painting && f.floorId === activeFloorId && (
               <PaintPickables floorId={f.floorId} />
@@ -1078,7 +1097,7 @@ function SceneContent({
           slabs={visibleSlabs}
           activeFloorId={activeFloorId}
           shadowsEnabled={lighting.shadowsEnabled}
-          exterior={finishExterior}
+          visibilityByFloor={visibilityByFloor}
           pickable={!painting && !placing}
         />
         {!visit && !painting && !placing && <WallPickables />}
@@ -1095,7 +1114,7 @@ function SceneContent({
         <VisitControls
           spawn={spawn}
           floorY={floorY}
-          onLockChange={onVisitLockChange}
+          onActiveChange={onVisitActiveChange}
         />
       ) : (
         <>
@@ -1128,11 +1147,24 @@ export function BuildingScene() {
   const setSceneMode = useBuildingStore((s) => s.setSceneMode)
   const lightingMenuOpen = useBuildingStore((s) => s.lightingMenuOpen)
   const setLightingMenuOpen = useBuildingStore((s) => s.setLightingMenuOpen)
-  const [visitLocked, setVisitLocked] = useState(false)
+  const [visitActive, setVisitActive] = useState<VisitActiveState>({
+    engaged: false,
+    pointerLocked: false,
+  })
   const painting = sceneMode === 'paint'
 
   return (
-    <div className={`view3d${painting ? ' view3d-paint' : ''}`}>
+    <div
+      className={`view3d${painting ? ' view3d-paint' : ''}${
+        sceneMode === 'visit' ? ' view3d-visit' : ''
+      }${
+        sceneMode === 'visit' && visitActive.engaged ? ' view3d-visit-active' : ''
+      }${
+        sceneMode === 'visit' && visitActive.pointerLocked
+          ? ' view3d-visit-locked'
+          : ''
+      }`}
+    >
       <div className="view3d-bar">
         <button
           type="button"
@@ -1154,7 +1186,7 @@ export function BuildingScene() {
           type="button"
           className={sceneMode === 'visit' ? 'active' : ''}
           onClick={() => {
-            setVisitLocked(false)
+            setVisitActive({ engaged: false, pointerLocked: false })
             setSceneMode('visit')
           }}
           disabled={painting}
@@ -1169,11 +1201,6 @@ export function BuildingScene() {
           Свет
         </button>
       </div>
-      {sceneMode === 'visit' && !visitLocked && (
-        <div className="visit-hint">
-          Кликните по сцене · WASD — ходьба · Esc — выход
-        </div>
-      )}
       {painting && (
         <div className="paint-hint-bar muted">
           ЛКМ — нанести · Alt+ЛКМ — стереть · Shift+ЛКМ по полу — все стены комнаты
@@ -1184,6 +1211,19 @@ export function BuildingScene() {
         className="view3d-body"
         onContextMenu={(e) => e.preventDefault()}
       >
+        {sceneMode === 'visit' && !visitActive.pointerLocked && (
+          <div className="visit-hint visit-hint-shooter">
+            <strong>Кликните для захвата мыши</strong>
+            <span>Мышь — обзор · WASD — ходьба · Shift — бег · Esc — выход</span>
+            <span className="visit-hint-note">
+              На Hyprland, если курсор упирается в край: Chromium через X11
+              (`chromium --ozone-platform=x11`) или браузер в XWayland
+            </span>
+          </div>
+        )}
+        {sceneMode === 'visit' && visitActive.pointerLocked && (
+          <div className="visit-crosshair" aria-hidden />
+        )}
         <Canvas
           camera={{ position: [10, 8, 10], fov: 45 }}
           shadows
@@ -1204,7 +1244,7 @@ export function BuildingScene() {
           }}
         >
           <Suspense fallback={null}>
-            <SceneContent onVisitLockChange={setVisitLocked} />
+            <SceneContent onVisitActiveChange={setVisitActive} />
           </Suspense>
         </Canvas>
       </div>

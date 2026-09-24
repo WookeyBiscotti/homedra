@@ -16,7 +16,7 @@ function rectFloor(): Floor {
     elevation: 0,
     height: 2.8,
     slabThickness: 0.2,
-    visible: true,
+    visible: 'solid',
     vertices: [
       { id: 'v1', x: 0, y: 0 },
       { id: 'v2', x: 6, y: 0 },
@@ -44,7 +44,7 @@ function twoRoomFloor(): Floor {
     elevation: 0,
     height: 2.8,
     slabThickness: 0.2,
-    visible: true,
+    visible: 'solid',
     vertices: [
       { id: 'v1', x: 0, y: 0 },
       { id: 'v2', x: 3, y: 0 },
@@ -78,7 +78,7 @@ function lShapedFloor(): Floor {
     elevation: 0,
     height: 2.8,
     slabThickness: 0.2,
-    visible: true,
+    visible: 'solid',
     vertices: [
       { id: 'v1', x: 0, y: 0 },
       { id: 'v2', x: 6, y: 0 },

@@ -36,10 +36,12 @@ import {
   createEmptyBuilding,
   createEmptyFloor,
   createId,
+  cycleFloorVisibility,
   DEFAULT_LIGHTING,
   ensureBuildingOpenings,
   estimatePlanHalf,
   type Floor,
+  type FloorVisibility,
   isGroundFloor,
   isStoryFloor,
   type LightingSettings,
@@ -49,6 +51,7 @@ import {
   type ObjectAppearance,
   type OpeningKind,
   type PlacedObject,
+  normalizeFloorVisibility,
   recalcFloorElevations,
   type SceneMode,
   type Selection,
@@ -184,7 +187,8 @@ interface BuildingState {
   setFloorSlabThickness: (id: string, thickness: number) => void
   /** Absolute Y for ground or first story walking surface. */
   setFloorElevation: (id: string, elevation: number) => void
-  setFloorVisible: (id: string, visible: boolean) => void
+  setFloorVisible: (id: string, visible: FloorVisibility) => void
+  cycleFloorVisible: (id: string) => void
 
   updateActiveFloor: (fn: (floor: Floor) => Floor, recordHistory?: boolean) => void
 
@@ -775,6 +779,25 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
           ...get().building,
           floors: get().building.floors.map((f) =>
             f.id === id ? { ...f, visible } : f,
+          ),
+        },
+      })
+    },
+
+    cycleFloorVisible: (id) => {
+      get().pushHistory()
+      set({
+        building: {
+          ...get().building,
+          floors: get().building.floors.map((f) =>
+            f.id === id
+              ? {
+                  ...f,
+                  visible: cycleFloorVisibility(
+                    normalizeFloorVisibility(f.visible),
+                  ),
+                }
+              : f,
           ),
         },
       })

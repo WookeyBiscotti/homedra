@@ -149,15 +149,35 @@ input {
   opacity: 0.55;
 }
 
-.floor-tab .floor-vis {
-  margin: 0;
-  accent-color: var(--accent);
-  cursor: pointer;
-  flex-shrink: 0;
+.floor-tab.ghost-floor {
+  opacity: 0.8;
 }
 
-.floor-tab.active .floor-vis {
-  accent-color: #f7f3eb;
+.floor-tab .floor-vis {
+  margin: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  line-height: 0;
+  border-radius: 3px;
+}
+
+.floor-tab .floor-vis:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.floor-tab .floor-vis-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.floor-tab.active .floor-vis-icon {
+  filter: invert(1) brightness(1.05);
 }
 
 .floor-tab-name {
@@ -445,6 +465,13 @@ body.panel-resizing * {
   flex: 1;
   min-width: 0;
   min-height: 0;
+}
+
+.view3d-body:fullscreen,
+.view3d-body:-webkit-full-screen {
+  background: #0b0d10;
+  width: 100%;
+  height: 100%;
 }
 
 .view3d-bar button:disabled {
@@ -798,7 +825,7 @@ button.linkish {
 
 .visit-hint {
   position: absolute;
-  z-index: 2;
+  z-index: 5;
   left: 50%;
   bottom: 1.25rem;
   transform: translateX(-50%);
@@ -810,6 +837,76 @@ button.linkish {
   font-size: 0.85rem;
   pointer-events: none;
   white-space: nowrap;
+}
+
+.visit-hint-shooter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  white-space: normal;
+  text-align: center;
+  max-width: min(420px, calc(100% - 2rem));
+  padding: 0.75rem 1rem;
+}
+
+.visit-hint-shooter strong {
+  font-size: 0.95rem;
+}
+
+.visit-hint-note {
+  font-size: 0.72rem;
+  opacity: 0.75;
+  line-height: 1.35;
+}
+
+.view3d-visit .view3d-body,
+.view3d-visit .view3d-body canvas {
+  cursor: crosshair;
+}
+
+/* Offset-look mode (Hyprland): keep cursor visible so edge deflection works. */
+.view3d-visit-active:not(.view3d-visit-locked) .view3d-body,
+.view3d-visit-active:not(.view3d-visit-locked) .view3d-body canvas {
+  cursor: crosshair;
+}
+
+.view3d-visit-locked .view3d-body,
+.view3d-visit-locked .view3d-body canvas {
+  cursor: none;
+}
+
+.visit-crosshair {
+  position: absolute;
+  z-index: 5;
+  left: 50%;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.visit-crosshair::before,
+.visit-crosshair::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  background: color-mix(in srgb, var(--ink) 85%, #fff);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--panel) 70%, transparent);
+}
+
+.visit-crosshair::before {
+  width: 14px;
+  height: 2px;
+  transform: translate(-50%, -50%);
+}
+
+.visit-crosshair::after {
+  width: 2px;
+  height: 14px;
+  transform: translate(-50%, -50%);
 }
 
 .lighting-panel {

@@ -136,6 +136,36 @@ export interface FloorPlate {
 /** Terrain level vs. a normal story with walls/slab. */
 export type FloorKind = 'ground' | 'story'
 
+/**
+ * Per-floor 3D visibility (floor tab cycles these):
+ * - solid — fully opaque
+ * - ghost — translucent
+ * - hidden — not rendered
+ */
+export type FloorVisibility = 'solid' | 'ghost' | 'hidden'
+
+export const FLOOR_VISIBILITY_CYCLE: FloorVisibility[] = [
+  'solid',
+  'ghost',
+  'hidden',
+]
+
+/** Migrate older boolean `visible` and normalize unknown values. */
+export function normalizeFloorVisibility(value: unknown): FloorVisibility {
+  if (value === false || value === 'hidden') return 'hidden'
+  if (value === 'ghost') return 'ghost'
+  return 'solid'
+}
+
+export function cycleFloorVisibility(value: FloorVisibility): FloorVisibility {
+  const i = FLOOR_VISIBILITY_CYCLE.indexOf(value)
+  return FLOOR_VISIBILITY_CYCLE[(i + 1) % FLOOR_VISIBILITY_CYCLE.length]!
+}
+
+export function isFloorRendered(value: FloorVisibility): boolean {
+  return value !== 'hidden'
+}
+
 export interface Floor {
   id: Id
   name: string
@@ -150,9 +180,9 @@ export interface Floor {
    */
   slabThickness: number
   /**
-   * Show in 3D. Controlled by the checkbox on the floor tab.
+   * 3D visibility. Controlled by the button on the floor tab.
    */
-  visible: boolean
+  visible: FloorVisibility
   vertices: Vertex[]
   walls: Wall[]
   constraints: Constraint[]
@@ -554,7 +584,7 @@ export function createEmptyFloor(
     elevation,
     height,
     slabThickness: kind === 'ground' ? 0.05 : 0.2,
-    visible: true,
+    visible: 'solid',
     vertices: [],
     walls: [],
     constraints: [],
@@ -593,7 +623,7 @@ export function ensureGroundFloor(floors: Floor[]): Floor[] {
   const normalized = floors.map((f) => ({
     ...f,
     kind: (f.kind ?? 'story') as FloorKind,
-    visible: f.visible !== false,
+    visible: normalizeFloorVisibility(f.visible),
   }))
   const existing = normalized.find(isGroundFloor)
   const stories = normalized.filter(isStoryFloor)
@@ -603,7 +633,7 @@ export function ensureGroundFloor(floors: Floor[]): Floor[] {
         ...existing,
         name: existing.name || 'Земля',
         height: 0,
-        visible: existing.visible !== false,
+        visible: normalizeFloorVisibility(existing.visible),
       },
       ...stories,
     ]
@@ -628,7 +658,7 @@ export function recalcFloorElevations(floors: Floor[]): Floor[] {
         height: 0,
         slabThickness: 0.05,
         elevation: f.elevation,
-        visible: f.visible !== false,
+        visible: normalizeFloorVisibility(f.visible),
       }
     }
     const slab = Math.max(0.05, Math.min(1, f.slabThickness ?? 0.2))
@@ -694,7 +724,7 @@ export function ensureFloorOpenings(floor: Floor): Floor {
   return {
     ...floor,
     kind,
-    visible: floor.visible !== false,
+    visible: normalizeFloorVisibility(floor.visible),
     slabThickness:
       kind === 'ground'
         ? 0.05

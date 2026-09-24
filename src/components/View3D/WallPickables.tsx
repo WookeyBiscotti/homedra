@@ -2,7 +2,7 @@ import { Edges } from '@react-three/drei'
 import type { ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
 import { wallEndpoints } from '../../engine/geometry/openings'
-import { isWallSelected } from '../../engine/types'
+import { isFloorRendered, isWallSelected, normalizeFloorVisibility } from '../../engine/types'
 import { useBuildingStore } from '../../store/buildingStore'
 
 const SELECTED = '#c45c26'
@@ -79,7 +79,7 @@ export function WallPickables() {
     <group>
       {building.floors.map((floor) => {
         if (floor.kind === 'ground') return null
-        if (floor.visible === false) return null
+        if (!isFloorRendered(normalizeFloorVisibility(floor.visible))) return null
         return (
           <group key={floor.id}>
             {floor.walls.map((wall) => {
