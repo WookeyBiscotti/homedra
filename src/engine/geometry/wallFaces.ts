@@ -1,7 +1,8 @@
 import * as THREE from 'three'
+import polygonClipping from 'polygon-clipping'
 import type { Floor, Wall, WallSide } from '../types'
 import { wallFaceEndpoints, wallAxes } from './wallSolid'
-import { openingsForWall, openingSpan, wallEndpoints } from './openings'
+import { openingsForWall, openingSpan } from './openings'
 
 const FACE_OUTSET = 0.025
 /** Wall paint hit starts above the slab so floor pick owns near-wall clicks. */
@@ -58,10 +59,8 @@ export function buildWallFaceGeometry(
   const { ax, az, len, ux, uz, wnx, wnz } = frame
 
   const openings = openingsForWall(floor, wall.id)
-  // Opening offsets are along the centerline; scale onto the mitered face length.
-  const center = wallEndpoints(floor, wall)
-  const uScale =
-    center && center.len > 1e-6 ? len / center.len : 1
+  // Opening offsets are along the centerline; face u = s − s0 (parallel offset).
+  const { s0 } = frame
 
   const ySet = new Set<number>([0, floor.height])
   for (const o of openings) {
@@ -111,8 +110,8 @@ export function buildWallFaceGeometry(
       if (midY <= o.sillHeight + 1e-6 || midY >= top - 1e-6) continue
       const span = openingSpan(o)
       blocked.push({
-        start: span.start * uScale,
-        end: span.end * uScale,
+        start: span.start - s0,
+        end: span.end - s0,
       })
     }
     for (const seg of freeIntervals(len, blocked)) {
@@ -143,7 +142,11 @@ export type WallFaceFrame = {
   /** Plan-space endpoints before world convert (for opening tests). */
   planA: { x: number; y: number }
   planB: { x: number; y: number }
-  uScale: number
+  /**
+   * Along-centerline distance of face start (planA) from wall vertex `a`.
+   * Opening spans map to face u as `s - s0` (miters inset the face; do not scale).
+   */
+  s0: number
   height: number
   elevation: number
 }
@@ -174,9 +177,9 @@ export function wallFaceFrame(
   const wnx = nx
   const wnz = -ny
 
-  const center = wallEndpoints(floor, wall)
-  const uScale =
-    center && center.len > 1e-6 ? len / center.len : 1
+  // Face is parallel to centerline but starts at miter inset s0 ≠ 0.
+  const s0 =
+    (ends.a.x - axes.a.x) * axes.ux + (ends.a.y - axes.a.y) * axes.uy
 
   return {
     ax,
@@ -190,7 +193,7 @@ export function wallFaceFrame(
     wnz,
     planA: ends.a,
     planB: ends.b,
-    uScale,
+    s0,
     height: floor.height,
     elevation: floor.elevation,
   }
@@ -251,7 +254,7 @@ export function wallFaceHitInOpening(
 ): boolean {
   const frame = wallFaceFrame(floor, wall, side, FACE_OUTSET + 0.03)
   if (!frame) return false
-  const { ax, az, ux, uz, len, uScale, elevation } = frame
+  const { ax, az, ux, uz, len, s0, elevation } = frame
   const dx = worldPoint.x - ax
   const dz = worldPoint.z - az
   const u = dx * ux + dz * uz
@@ -259,10 +262,10 @@ export function wallFaceHitInOpening(
   if (u < -1e-3 || u > len + 1e-3) return false
   if (y < -1e-3 || y > floor.height + 1e-3) return false
 
-  const uCenter = u / uScale
+  const s = u + s0
   for (const o of openingsForWall(floor, wall.id)) {
     const span = openingSpan(o)
-    if (uCenter < span.start - 1e-3 || uCenter > span.end + 1e-3) continue
+    if (s < span.start - 1e-3 || s > span.end + 1e-3) continue
     const top = o.sillHeight + o.height
     if (y >= o.sillHeight - 1e-3 && y <= top + 1e-3) return true
   }
@@ -327,6 +330,9 @@ function pushFaceQuad(args: {
   indices.push(base, base + 1, base + 2, base, base + 2, base + 3)
 }
 
+/** Must sit above the slab top bias (+0.01) so finishes aren't buried under depthWrite. */
+export const FLOOR_FINISH_Y_OFFSET = 0.015
+
 /** Flat floor polygon for a room (walking surface). UV = world XZ in meters. */
 export function buildRoomFloorGeometry(
   polygon: Array<{ x: number; y: number }>,
@@ -339,7 +345,7 @@ export function buildRoomFloorGeometry(
   },
 ): THREE.BufferGeometry | null {
   if (polygon.length < 3) return null
-  const yOffset = opts?.yOffset ?? 0.002
+  const yOffset = opts?.yOffset ?? FLOOR_FINISH_Y_OFFSET
   const inflated =
     opts?.inflateM && opts.inflateM > 0
       ? inflatePolygonOutward(polygon, opts.inflateM)
@@ -356,18 +362,19 @@ export function buildRoomFloorGeometry(
 
   for (const hole of opts?.holes ?? []) {
     if (hole.length < 3) continue
-    // Earcut crashes / yields NaN if a hole lies outside the outer ring.
-    const cx = hole.reduce((s, p) => s + p.x, 0) / hole.length
-    const cy = hole.reduce((s, p) => s + p.y, 0) / hole.length
-    if (!pointInRingXY(cx, cy, outer)) continue
-    const ring = orientRingForShape(hole, false)
-    const path = new THREE.Path()
-    path.moveTo(ring[0].x, ring[0].y)
-    for (let i = 1; i < ring.length; i++) {
-      path.lineTo(ring[i].x, ring[i].y)
+    // Clip to outer: stair rects often overhang the wall-inset room polygon;
+    // unclipped holes make earcut skip the cut and the finish covers the well.
+    for (const clipped of clipRingToOuter(hole, outer)) {
+      if (clipped.length < 3) continue
+      const ring = orientRingForShape(clipped, false)
+      const path = new THREE.Path()
+      path.moveTo(ring[0].x, ring[0].y)
+      for (let i = 1; i < ring.length; i++) {
+        path.lineTo(ring[i].x, ring[i].y)
+      }
+      path.closePath()
+      shape.holes.push(path)
     }
-    path.closePath()
-    shape.holes.push(path)
   }
 
   let geo: THREE.BufferGeometry
@@ -417,6 +424,61 @@ function pointInRingXY(
     if (yi > y !== yj > y && x < t) inside = !inside
   }
   return inside
+}
+
+type Pair = [number, number]
+type Ring = Pair[]
+
+function toClosedRing(pts: Array<{ x: number; y: number }>): Ring {
+  const ring: Ring = pts.map((p) => [p.x, p.y])
+  const f = ring[0]
+  const l = ring[ring.length - 1]
+  if (!f || !l) return ring
+  if (f[0] !== l[0] || f[1] !== l[1]) ring.push([f[0], f[1]])
+  return ring
+}
+
+function fromOpenRing(ring: Ring): Array<{ x: number; y: number }> {
+  const pts = ring.map(([x, y]) => ({ x, y }))
+  if (
+    pts.length > 1 &&
+    pts[0].x === pts[pts.length - 1].x &&
+    pts[0].y === pts[pts.length - 1].y
+  ) {
+    pts.pop()
+  }
+  return pts
+}
+
+/**
+ * Intersection of `hole` with `outer` so Shape/earcut always gets a hole
+ * fully inside the outer ring (partial stair wells near walls).
+ */
+function clipRingToOuter(
+  hole: Array<{ x: number; y: number }>,
+  outer: Array<{ x: number; y: number }>,
+): Array<Array<{ x: number; y: number }>> {
+  if (hole.length < 3 || outer.length < 3) return []
+  try {
+    const clipped = polygonClipping.intersection(
+      [toClosedRing(outer)],
+      [toClosedRing(hole)],
+    ) as Pair[][][]
+    const out: Array<Array<{ x: number; y: number }>> = []
+    for (const poly of clipped) {
+      if (!poly?.[0] || poly[0].length < 4) continue
+      const pts = fromOpenRing(poly[0])
+      if (pts.length >= 3) out.push(pts)
+    }
+    return out
+  } catch {
+    // Fallback: only keep fully-contained holes (centroid + all verts)
+    const cx = hole.reduce((s, p) => s + p.x, 0) / hole.length
+    const cy = hole.reduce((s, p) => s + p.y, 0) / hole.length
+    if (!pointInRingXY(cx, cy, outer)) return []
+    if (hole.every((p) => pointInRingXY(p.x, p.y, outer))) return [hole]
+    return []
+  }
 }
 
 function orientRingForShape(

@@ -3,11 +3,12 @@ import react from '@vitejs/plugin-react'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
+import { apiProxies, assetProxyPlugin } from './vite.proxy.ts'
 
 const root = path.dirname(fileURLToPath(import.meta.url))
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), assetProxyPlugin()],
   resolve: {
     alias: {
       math: path.resolve(root, 'vendor/jsketcher/math'),
@@ -17,6 +18,12 @@ export default defineConfig({
   },
   optimizeDeps: {
     include: ['numeric'],
+  },
+  server: {
+    proxy: apiProxies,
+  },
+  preview: {
+    proxy: apiProxies,
   },
   test: {
     environment: 'node',

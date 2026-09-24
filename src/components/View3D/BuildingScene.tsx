@@ -4,10 +4,8 @@ import {
   Environment,
   Lightformer,
   OrbitControls,
-  Sky,
 } from '@react-three/drei'
 import {
-  Bloom,
   BrightnessContrast,
   EffectComposer,
   N8AO,
@@ -16,7 +14,7 @@ import {
   Vignette,
 } from '@react-three/postprocessing'
 import { ToneMappingMode } from 'postprocessing'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, Suspense } from 'react'
 import type { ThreeEvent } from '@react-three/fiber'
 import { buildingBounds, buildingFootprintHoles, extrudeBuilding } from '../../engine/extrude'
 import { floorPaintRegions } from '../../engine/geometry/floorPaint'
@@ -24,6 +22,7 @@ import { floorSlabOpeningHoles } from '../../engine/geometry/slabOpenings'
 import {
   buildRoomFloorGeometry,
   buildWallFaceGeometry,
+  FLOOR_FINISH_Y_OFFSET,
 } from '../../engine/geometry/wallFaces'
 import {
   buildSlabOpeningCutGeometry,
@@ -36,10 +35,10 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { LightingPanel } from './LightingPanel'
 import { OpeningPickables } from './OpeningPickables'
 import { PaintPickables, disableRaycast } from './PaintPickables'
-import { PaintWorkbench } from './PaintWorkbench'
 import { PbrStandardMaterial } from './PbrStandardMaterial'
 import { VisitControls } from './VisitControls'
 import { WallPickables } from './WallPickables'
+import { PlaceObjectFloorHit, PlacedObjects } from './PlacedObjects'
 
 /**
  * Procedural IBL via Lightformers (no CDN HDR).
@@ -95,45 +94,17 @@ function LocalEnvironment({
   )
 }
 
-/** Exclude sky from N8AO (avoids rings / black artefacts). */
-function SceneSky({ sunPosition }: { sunPosition: [number, number, number] }) {
-  const ref = useRef<THREE.Object3D>(null)
-  useEffect(() => {
-    const sky = ref.current
-    if (!sky) return
-    sky.traverse((o) => {
-      o.userData.contributeToAO = false
-    })
-  }, [])
-  return (
-    <Sky
-      ref={ref as never}
-      distance={450000}
-      sunPosition={sunPosition}
-      turbidity={4.5}
-      rayleigh={1.8}
-      mieCoefficient={0.005}
-      mieDirectionalG={0.8}
-    />
-  )
-}
-
 /**
- * Stable post stack:
- * - N8AO halfRes=false (halfRes paints depth=1 / sky black — n8ao#51)
- * - Bloom without mipmapBlur (HDR sky + mipmapBlur → NaN black patches)
- * - ToneMapping in-chain (composer forces NoToneMapping on renderer)
- * Soft PCSS removed — shader-chunk patch broke WebGL materials (error 1282).
+ * Post stack without Bloom / procedural Sky.
+ * Sky shader outputs Inf near the sun → half-float NaN → black flashes by angle.
  */
 function PostFx({
   exposure,
   aoIntensity,
-  bloomIntensity,
   vignetteDarkness,
 }: {
   exposure: number
   aoIntensity: number
-  bloomIntensity: number
   vignetteDarkness: number
 }) {
   const brightness = (exposure - 1) * 0.35
@@ -149,12 +120,6 @@ function PostFx({
         distanceFalloff={1}
         intensity={Math.max(0, aoIntensity)}
         halfRes={false}
-      />
-      <Bloom
-        luminanceThreshold={1.25}
-        luminanceSmoothing={0.4}
-        intensity={Math.max(0, bloomIntensity)}
-        radius={0.4}
       />
       <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
       <BrightnessContrast brightness={brightness} contrast={0} />
@@ -520,6 +485,7 @@ function FloorFinishes({
       if (!mat) continue
       const geo = buildRoomFloorGeometry(region.polygon, floor.elevation, {
         holes,
+        yOffset: FLOOR_FINISH_Y_OFFSET,
       })
       if (!geo) continue
       out.push({ key: region.key, geo, mat })
@@ -1009,9 +975,8 @@ function SceneContent({
     <>
       <ToneMappingSetup exposure={lighting.exposure} />
       <PaintEventFilter enabled={painting} />
-      <color attach="background" args={['#b8c9d4']} />
-      <fog attach="fog" args={['#b8c9d4', 35, 95]} />
-      <SceneSky sunPosition={dir} />
+      <color attach="background" args={[lighting.skyColor]} />
+      <fog attach="fog" args={[lighting.skyColor, 40, 110]} />
 
       <hemisphereLight
         args={[lighting.skyColor, lighting.groundColor, lighting.ambientIntensity]}
@@ -1061,7 +1026,9 @@ function SceneContent({
       )}
 
       <group>
-        {visibleFloors.map((f) => (
+        {visibleFloors.map((f) => {
+          const floorData = building.floors.find((fl) => fl.id === f.floorId)
+          return (
           <group key={f.floorId}>
             <FloorWallSolidMesh
               floorId={f.floorId}
@@ -1080,8 +1047,22 @@ function SceneContent({
             {painting && f.floorId === activeFloorId && (
               <PaintPickables floorId={f.floorId} />
             )}
+            {floorData && floorData.kind !== 'ground' && (
+              <PlacedObjects
+                floor={floorData}
+                shadowsEnabled={lighting.shadowsEnabled}
+              />
+            )}
+            {!visit &&
+              !painting &&
+              floorData &&
+              floorData.id === activeFloorId &&
+              floorData.kind !== 'ground' && (
+                <PlaceObjectFloorHit floor={floorData} />
+              )}
           </group>
-        ))}
+          )
+        })}
         <FloorSlabs
           slabs={visibleSlabs}
           activeFloorId={activeFloorId}
@@ -1113,7 +1094,6 @@ function SceneContent({
       <PostFx
         exposure={lighting.exposure}
         aoIntensity={lighting.aoIntensity}
-        bloomIntensity={lighting.bloomIntensity}
         vignetteDarkness={lighting.vignetteDarkness}
       />
     </>
@@ -1136,6 +1116,7 @@ export function BuildingScene() {
           type="button"
           className={sceneMode === 'interior' ? 'active' : ''}
           onClick={() => setSceneMode('interior')}
+          disabled={painting}
         >
           Интерьер
         </button>
@@ -1143,15 +1124,9 @@ export function BuildingScene() {
           type="button"
           className={sceneMode === 'exterior' ? 'active' : ''}
           onClick={() => setSceneMode('exterior')}
+          disabled={painting}
         >
           Экстерьер
-        </button>
-        <button
-          type="button"
-          className={sceneMode === 'paint' ? 'active' : ''}
-          onClick={() => setSceneMode('paint')}
-        >
-          Покраска
         </button>
         <button
           type="button"
@@ -1160,6 +1135,7 @@ export function BuildingScene() {
             setVisitLocked(false)
             setSceneMode('visit')
           }}
+          disabled={painting}
         >
           Виртуальный визит
         </button>
@@ -1183,7 +1159,6 @@ export function BuildingScene() {
       )}
       <LightingPanel />
       <div className="view3d-body">
-        {painting && <PaintWorkbench />}
         <Canvas
           camera={{ position: [10, 8, 10], fov: 45 }}
           shadows
@@ -1197,7 +1172,9 @@ export function BuildingScene() {
             setSelection(null)
           }}
         >
-          <SceneContent onVisitLockChange={setVisitLocked} />
+          <Suspense fallback={null}>
+            <SceneContent onVisitLockChange={setVisitLocked} />
+          </Suspense>
         </Canvas>
       </div>
     </div>

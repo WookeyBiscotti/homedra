@@ -26,9 +26,9 @@ export function PaintWorkbench() {
     : null
 
   return (
-    <aside className="paint-workbench" aria-label="Покраска">
+    <aside className="toolbar workbench-rail paint-workbench" aria-label="Покраска">
       <header className="paint-workbench-header">
-        <h3>Кисть</h3>
+        <h2 className="panel-title">Покраска</h2>
         {paintBrush && (
           <button
             type="button"

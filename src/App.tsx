@@ -1,10 +1,14 @@
 import { useEffect, useRef } from 'react'
 import { FloorTabs } from './components/FloorTabs'
 import { FloorPlanCanvas } from './components/Plan2D/FloorPlanCanvas'
+import { LibraryTokensSettings } from './components/LibraryTokensSettings'
+import { ModelBrowser } from './components/ModelBrowser'
 import { PropertiesPanel } from './components/PropertiesPanel'
-import { Toolbar } from './components/Toolbar'
+import { WorkbenchRail } from './components/WorkbenchRail'
+import { WorkbenchSwitcher } from './components/WorkbenchSwitcher'
 import { BuildingScene } from './components/View3D/BuildingScene'
 import type { Tool } from './engine/types'
+import { toolsForWorkbench } from './engine/types'
 import { useBuildingStore } from './store/buildingStore'
 import './App.css'
 
@@ -15,6 +19,7 @@ const keyToTool: Record<string, Tool> = {
   o: 'passage',
   n: 'window',
   s: 'stair',
+  f: 'placeObject',
   l: 'lockLength',
   p: 'lockPoint',
   h: 'horizontal',
@@ -24,6 +29,10 @@ const keyToTool: Record<string, Tool> = {
 function TopBar() {
   const viewMode = useBuildingStore((s) => s.viewMode)
   const setViewMode = useBuildingStore((s) => s.setViewMode)
+  const undo = useBuildingStore((s) => s.undo)
+  const redo = useBuildingStore((s) => s.redo)
+  const history = useBuildingStore((s) => s.history)
+  const future = useBuildingStore((s) => s.future)
   const saveLocal = useBuildingStore((s) => s.saveLocal)
   const loadLocal = useBuildingStore((s) => s.loadLocal)
   const exportJson = useBuildingStore((s) => s.exportJson)
@@ -37,6 +46,43 @@ function TopBar() {
         <span className="brand-mark">Interior</span>
         <span className="brand-sub">CAD Planner</span>
       </div>
+      <div className="history-actions" role="group" aria-label="История">
+        <button
+          type="button"
+          onClick={undo}
+          disabled={history.length === 0}
+          title="Отменить (Ctrl+Z)"
+        >
+          <img
+            src="/icons/ui/undo.svg"
+            alt=""
+            className="ui-icon"
+            width={16}
+            height={16}
+            draggable={false}
+          />
+          <span className="history-label">Отменить</span>
+          <kbd>Ctrl+Z</kbd>
+        </button>
+        <button
+          type="button"
+          onClick={redo}
+          disabled={future.length === 0}
+          title="Повторить (Ctrl+Y)"
+        >
+          <img
+            src="/icons/ui/redo.svg"
+            alt=""
+            className="ui-icon"
+            width={16}
+            height={16}
+            draggable={false}
+          />
+          <span className="history-label">Повторить</span>
+          <kbd>Ctrl+Y</kbd>
+        </button>
+      </div>
+      <WorkbenchSwitcher />
       <FloorTabs />
       <div className="view-toggle">
         <button
@@ -101,6 +147,7 @@ function TopBar() {
 
 export default function App() {
   const setTool = useBuildingStore((s) => s.setTool)
+  const workbench = useBuildingStore((s) => s.workbench)
   const undo = useBuildingStore((s) => s.undo)
   const redo = useBuildingStore((s) => s.redo)
   const deleteSelection = useBuildingStore((s) => s.deleteSelection)
@@ -138,20 +185,30 @@ export default function App() {
         cancelSlabOpeningDraft()
         return
       }
-      if (key === 'm' && !mod) {
+      if (key === 'm' && !mod && workbench === 'draft') {
         e.preventDefault()
         mergeSelectedVertices()
         return
       }
       if (!mod) {
         const tool = keyToTool[key]
-        if (tool) setTool(tool)
+        if (!tool) return
+        // placeObject always routes to furnish workbench via setTool
+        if (tool === 'placeObject') {
+          setTool(tool)
+          return
+        }
+        const allowed = toolsForWorkbench(workbench)
+        if (allowed.includes(tool) || toolsForWorkbench('draft').includes(tool)) {
+          setTool(tool)
+        }
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [
     setTool,
+    workbench,
     undo,
     redo,
     deleteSelection,
@@ -162,15 +219,17 @@ export default function App() {
   ])
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell workbench-${workbench}`}>
       <TopBar />
-      <div className="workspace">
-        <Toolbar />
+      <div className={`workspace workspace-${workbench}`}>
+        <WorkbenchRail />
         <main className="viewport">
           {viewMode === '2d' ? <FloorPlanCanvas /> : <BuildingScene />}
         </main>
         <PropertiesPanel />
       </div>
+      <ModelBrowser />
+      <LibraryTokensSettings />
     </div>
   )
 }

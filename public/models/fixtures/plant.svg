@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <rect width="256" height="256" fill="#f4efe6"/>
+  
+      <circle cx="128" cy="118" r="70" fill="rgb(51,140,64)" stroke="#2a241c" stroke-width="3"/>
+      <ellipse cx="128" cy="200" rx="78" ry="18" fill="rgba(42,36,28,0.18)"/>
+    
+  <text x="128" y="246" text-anchor="middle" font-family="IBM Plex Sans,Segoe UI,sans-serif" font-size="16" fill="#6e6356">Растение</text>
+</svg>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <rect width="256" height="256" fill="#f4efe6"/>
+  
+      <path d="M128 40 L210 90 L210 170 L128 220 L46 170 L46 90 Z" fill="rgb(179,179,184)" stroke="#2a241c" stroke-width="3"/>
+      <path d="M128 40 L210 90 L128 140 L46 90 Z" fill="rgba(255,255,255,0.22)"/>
+      <path d="M128 140 L210 90 L210 170 L128 220 Z" fill="rgba(0,0,0,0.18)"/>
+    
+  <text x="128" y="246" text-anchor="middle" font-family="IBM Plex Sans,Segoe UI,sans-serif" font-size="16" fill="#6e6356">Lunar Module</text>
+</svg>

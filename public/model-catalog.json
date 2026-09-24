@@ -1,0 +1,56 @@
+{
+  "source": "curated-cc0",
+  "count": 5,
+  "assets": [
+    {
+      "id": "chair",
+      "title": "Стул",
+      "category": "furniture",
+      "license": "CC0",
+      "author": "Interior fixtures",
+      "glbUrl": "/models/fixtures/chair.glb",
+      "thumbnailUrl": "/models/fixtures/chair.svg",
+      "bbox": { "x": 0.5, "y": 0.9, "z": 0.5 }
+    },
+    {
+      "id": "table",
+      "title": "Стол",
+      "category": "furniture",
+      "license": "CC0",
+      "author": "Interior fixtures",
+      "glbUrl": "/models/fixtures/table.glb",
+      "thumbnailUrl": "/models/fixtures/table.svg",
+      "bbox": { "x": 1.2, "y": 0.75, "z": 0.7 }
+    },
+    {
+      "id": "sofa",
+      "title": "Диван",
+      "category": "furniture",
+      "license": "CC0",
+      "author": "Interior fixtures",
+      "glbUrl": "/models/fixtures/sofa.glb",
+      "thumbnailUrl": "/models/fixtures/sofa.svg",
+      "bbox": { "x": 1.8, "y": 0.7, "z": 0.8 }
+    },
+    {
+      "id": "lamp",
+      "title": "Торшер",
+      "category": "furniture",
+      "license": "CC0",
+      "author": "Interior fixtures",
+      "glbUrl": "/models/fixtures/lamp.glb",
+      "thumbnailUrl": "/models/fixtures/lamp.svg",
+      "bbox": { "x": 0.25, "y": 1.4, "z": 0.25 }
+    },
+    {
+      "id": "plant",
+      "title": "Растение",
+      "category": "decor",
+      "license": "CC0",
+      "author": "Interior fixtures",
+      "glbUrl": "/models/fixtures/plant.glb",
+      "thumbnailUrl": "/models/fixtures/plant.svg",
+      "bbox": { "x": 0.4, "y": 1.0, "z": 0.4 }
+    }
+  ]
+}

@@ -168,22 +168,6 @@ export function LightingPanel() {
           </span>
         </label>
         <label>
-          Bloom
-          <input
-            type="range"
-            min={0}
-            max={1.5}
-            step={0.05}
-            value={lighting.bloomIntensity}
-            onChange={(e) =>
-              setLighting({ bloomIntensity: Number(e.target.value) })
-            }
-          />
-          <span className="lighting-value">
-            {lighting.bloomIntensity.toFixed(2)}
-          </span>
-        </label>
-        <label>
           Vignette
           <input
             type="range"
@@ -200,7 +184,7 @@ export function LightingPanel() {
           </span>
         </label>
         <p className="muted" style={{ margin: '0.35rem 0 0', fontSize: '0.8rem' }}>
-          SMAA всегда включён. 0 на слайдере — эффект выключен.
+          SMAA всегда включён. Bloom отключён (ломал HDR). 0 — эффект выкл.
         </p>
       </div>
 

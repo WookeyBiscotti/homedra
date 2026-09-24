@@ -57,6 +57,7 @@ export function PropertiesPanel() {
   const updateOpening = useBuildingStore((s) => s.updateOpening)
   const updateSlabOpening = useBuildingStore((s) => s.updateSlabOpening)
   const setSlabOpeningMaterial = useBuildingStore((s) => s.setSlabOpeningMaterial)
+  const updatePlacedObject = useBuildingStore((s) => s.updatePlacedObject)
   const copyFromPreviousFloor = useBuildingStore((s) => s.copyFromPreviousFloor)
   const conflict = useBuildingStore((s) => s.conflict)
   const statusMessage = useBuildingStore((s) => s.statusMessage)
@@ -86,6 +87,10 @@ export function PropertiesPanel() {
   const slabOpening =
     selection?.kind === 'slabOpening'
       ? (floor.slabOpenings ?? []).find((o) => o.id === selection.id)
+      : null
+  const placedObject =
+    selection?.kind === 'object'
+      ? (floor.objects ?? []).find((o) => o.id === selection.id)
       : null
   const room =
     selection?.kind === 'room'
@@ -362,6 +367,82 @@ export function PropertiesPanel() {
             onChange={(ref) => setSlabOpeningMaterial(slabOpening.id, ref)}
             onClear={() => setSlabOpeningMaterial(slabOpening.id, null)}
           />
+        </section>
+      )}
+
+      {placedObject && (
+        <section className="prop-section">
+          <h3>3D объект</h3>
+          <p className="muted">
+            {placedObject.model.source === 'catalog' &&
+              `Каталог: ${placedObject.model.assetId}`}
+            {placedObject.model.source === 'nasa' &&
+              `NASA: ${placedObject.model.assetId}`}
+            {placedObject.model.source === 'local' &&
+              `Локальный: ${placedObject.model.localId}`}
+            {placedObject.model.source === 'library' &&
+              `${placedObject.model.library}: ${placedObject.model.id}`}
+            {placedObject.model.source === 'url' && 'URL'}
+          </p>
+          {placedObject.attribution && (
+            <p className="muted">
+              {placedObject.attribution.author} · {placedObject.attribution.license}
+            </p>
+          )}
+          <label>
+            X, м
+            <input
+              type="number"
+              step={0.05}
+              value={placedObject.x}
+              onChange={(e) =>
+                updatePlacedObject(placedObject.id, {
+                  x: Number(e.target.value),
+                })
+              }
+            />
+          </label>
+          <label>
+            Y (план), м
+            <input
+              type="number"
+              step={0.05}
+              value={placedObject.y}
+              onChange={(e) =>
+                updatePlacedObject(placedObject.id, {
+                  y: Number(e.target.value),
+                })
+              }
+            />
+          </label>
+          <label>
+            Поворот, °
+            <input
+              type="number"
+              step={5}
+              value={Math.round((placedObject.rotationY * 180) / Math.PI)}
+              onChange={(e) =>
+                updatePlacedObject(placedObject.id, {
+                  rotationY: (Number(e.target.value) * Math.PI) / 180,
+                })
+              }
+            />
+          </label>
+          <label>
+            Масштаб
+            <input
+              type="number"
+              min={0.05}
+              max={20}
+              step={0.05}
+              value={placedObject.scale}
+              onChange={(e) =>
+                updatePlacedObject(placedObject.id, {
+                  scale: Number(e.target.value),
+                })
+              }
+            />
+          </label>
         </section>
       )}
 
@@ -893,14 +974,14 @@ export function PropertiesPanel() {
         !multi &&
         !opening &&
         !slabOpening &&
+        !placedObject &&
         !distancePair &&
         !pointsAlign &&
         !vertexDistancePair &&
         !pointOnWallPair && (
         <p className="muted">
-          Выберите стену, вершину или проём. В 3D кликните по окну, двери или
-          проёму лестницы. Shift+клик — несколько. Alt+клик по ребру — точка на
-          стене. Точка+стена — прикрепить.
+          Выберите стену, вершину, проём или 3D-объект. Инструмент «Модель» (F) —
+          каталог. Shift+клик — несколько.
         </p>
       )}
 

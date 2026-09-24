@@ -30,6 +30,7 @@ import {
   joinedWallFootprint,
 } from '../../engine/geometry/wallSolid'
 import {
+  isObjectSelected,
   isOpeningSelected,
   isSlabOpeningSelected,
   isStairTool,
@@ -194,6 +195,8 @@ export function FloorPlanCanvas() {
   const updateSlabOpeningDraft = useBuildingStore((s) => s.updateSlabOpeningDraft)
   const finishSlabOpening = useBuildingStore((s) => s.finishSlabOpening)
   const dragSlabOpening = useBuildingStore((s) => s.dragSlabOpening)
+  const placeObjectAt = useBuildingStore((s) => s.placeObjectAt)
+  const dragPlacedObject = useBuildingStore((s) => s.dragPlacedObject)
   const selectAt = useBuildingStore((s) => s.selectAt)
   const selectInRect = useBuildingStore((s) => s.selectInRect)
   const applyConstraintTool = useBuildingStore((s) => s.applyConstraintTool)
@@ -221,6 +224,13 @@ export function FloorPlanCanvas() {
     moved: boolean
   } | null>(null)
   const slabMoveMoved = useRef(false)
+  const objectMove = useRef<{
+    id: string
+    start: { x: number; y: number }
+    origin: { x: number; y: number }
+    moved: boolean
+  } | null>(null)
+  const objectMoveMoved = useRef(false)
 
   const lowerFloor = useMemo(() => {
     const idx = building.floors.findIndex((f) => f.id === activeFloorId)
@@ -456,6 +466,19 @@ export function FloorPlanCanvas() {
       return
     }
 
+    if (objectMove.current) {
+      const drag = objectMove.current
+      const dx = w.x - drag.start.x
+      const dy = w.y - drag.start.y
+      if (!drag.moved && Math.hypot(dx, dy) < 0.02) return
+      if (!drag.moved) {
+        drag.moved = true
+        pushHistory()
+      }
+      dragPlacedObject(drag.id, drag.origin.x + dx, drag.origin.y + dy)
+      return
+    }
+
     if (edgeDrag.current) {
       const drag = edgeDrag.current
       const dx = w.x - drag.startPointer.x
@@ -511,6 +534,13 @@ export function FloorPlanCanvas() {
       setMarquee(null)
       return
     }
+    if (objectMove.current) {
+      objectMoveMoved.current = objectMove.current.moved
+      objectMove.current = null
+      marqueeActive.current = false
+      setMarquee(null)
+      return
+    }
     if (edgeDrag.current) {
       edgeDragMoved.current = edgeDrag.current.moved
       if (edgeDrag.current.moved) endDrag()
@@ -540,6 +570,10 @@ export function FloorPlanCanvas() {
     if (!pos) return
     const w = toWorld(pos.x, pos.y)
 
+    if (tool === 'placeObject') {
+      placeObjectAt(w.x, w.y)
+      return
+    }
     if (tool === 'wall') {
       if (!wallDraftFrom) beginWall(w.x, w.y)
       else finishWall(w.x, w.y)
@@ -1139,6 +1173,63 @@ export function FloorPlanCanvas() {
                   text="Л"
                   fontSize={14}
                   fontFamily="IBM Plex Sans, sans-serif"
+                  fill={selected ? '#c45c26' : '#2a6f6a'}
+                  listening={false}
+                />
+              </Group>
+            )
+          })}
+
+          {(floor.objects ?? []).map((obj) => {
+            const selected = isObjectSelected(selection, obj.id)
+            const mid = toScreen(obj.x, obj.y)
+            return (
+              <Group key={obj.id}>
+                <Circle
+                  x={mid.x}
+                  y={mid.y}
+                  radius={10}
+                  fill={
+                    selected
+                      ? 'rgba(196, 92, 38, 0.35)'
+                      : 'rgba(42, 111, 106, 0.25)'
+                  }
+                  stroke={selected ? '#c45c26' : '#2a6f6a'}
+                  strokeWidth={selected ? 2 : 1.5}
+                  onMouseDown={(e) => {
+                    if (tool !== 'select' || e.evt.button !== 0) return
+                    if (e.evt.shiftKey || spaceDown.current || e.evt.altKey)
+                      return
+                    e.cancelBubble = true
+                    marqueeActive.current = false
+                    setMarquee(null)
+                    setSelection({ kind: 'object', id: obj.id })
+                    const stage = e.target.getStage()
+                    const pos = stage?.getPointerPosition()
+                    const w = pos ? toWorld(pos.x, pos.y) : { x: 0, y: 0 }
+                    objectMove.current = {
+                      id: obj.id,
+                      start: { x: w.x, y: w.y },
+                      origin: { x: obj.x, y: obj.y },
+                      moved: false,
+                    }
+                  }}
+                  onClick={(e) => {
+                    e.cancelBubble = true
+                    if (objectMoveMoved.current) {
+                      objectMoveMoved.current = false
+                      return
+                    }
+                    if (tool === 'select') {
+                      setSelection({ kind: 'object', id: obj.id })
+                    }
+                  }}
+                />
+                <Text
+                  x={mid.x - 6}
+                  y={mid.y - 6}
+                  text="◼"
+                  fontSize={12}
                   fill={selected ? '#c45c26' : '#2a6f6a'}
                   listening={false}
                 />

@@ -144,6 +144,45 @@ export interface Floor {
   slabOpenings: SlabOpening[]
   /** Room key (closed wall cycle) → floor finish. */
   roomFloorMaterials?: Record<string, MaterialRef>
+  /** Placed 3D objects (furniture / props) on this floor. */
+  objects?: PlacedObject[]
+}
+
+/** Reference to a mesh asset; binaries live outside project JSON. */
+export type ModelRef =
+  | { source: 'catalog'; assetId: string; objectId?: string }
+  | { source: 'nasa'; assetId: string; objectId?: string }
+  | {
+      source: 'library'
+      library: 'polyPizza' | 'smithsonian' | 'sketchfab' | 'polyHaven'
+      id: string
+      /** Optional cached CDN / download hint. */
+      glbUrl?: string
+      /** Sub-object inside a multi-model glTF (`name:…` / `index:…`). */
+      objectId?: string
+    }
+  | { source: 'local'; localId: string; objectId?: string }
+  | { source: 'url'; url: string; license?: string; objectId?: string }
+
+export interface ModelAttribution {
+  author: string
+  license: string
+  url?: string
+}
+
+/** Instance of a 3D model on a floor (plan XZ → world XZ, Y up). */
+export interface PlacedObject {
+  id: Id
+  model: ModelRef
+  /** Plan X (meters) */
+  x: number
+  /** Plan Y → world Z (meters) */
+  y: number
+  /** Rotation around world Y, radians */
+  rotationY: number
+  /** Uniform scale */
+  scale: number
+  attribution?: ModelAttribution
 }
 
 export interface Building {
@@ -160,6 +199,7 @@ export type Tool =
   | 'passage'
   | 'window'
   | 'stair'
+  | 'placeObject'
   | 'lockLength'
   | 'lockPoint'
   | 'horizontal'
@@ -168,6 +208,41 @@ export type Tool =
 
 export type ViewMode = '2d' | '3d'
 export type SceneMode = 'interior' | 'exterior' | 'visit' | 'paint'
+
+/**
+ * FreeCAD-style workbench: swaps the left tool rail and gates tools / view.
+ * - draft: floor plan (walls, openings, constraints)
+ * - paint: materials brush in 3D
+ * - furnish: place / edit 3D objects
+ */
+export type Workbench = 'draft' | 'paint' | 'furnish'
+
+export const DRAFT_TOOLS: readonly Tool[] = [
+  'select',
+  'wall',
+  'door',
+  'passage',
+  'window',
+  'stair',
+  'lockLength',
+  'lockPoint',
+  'horizontal',
+  'vertical',
+  'wallDistance',
+]
+
+export const FURNISH_TOOLS: readonly Tool[] = ['select', 'placeObject']
+
+export function toolsForWorkbench(workbench: Workbench): readonly Tool[] {
+  switch (workbench) {
+    case 'draft':
+      return DRAFT_TOOLS
+    case 'furnish':
+      return FURNISH_TOOLS
+    case 'paint':
+      return ['select']
+  }
+}
 
 /** Global / sun lighting for the 3D viewport (not part of building JSON). */
 export interface LightingSettings {
@@ -179,7 +254,7 @@ export interface LightingSettings {
   sunAzimuth: number
   /** Elevation degrees: 0 = горизонт, 90 = зенит */
   sunElevation: number
-  /** Soft shadow penumbra size (drei SoftShadows / PCSS) */
+  /** Unused legacy field (kept for store compatibility) */
   shadowSoftness: number
   /** Cast / receive shadows */
   shadowsEnabled: boolean
@@ -189,8 +264,6 @@ export interface LightingSettings {
   exposure: number
   /** N8AO intensity (0 = off) */
   aoIntensity: number
-  /** Bloom intensity (0 = off) */
-  bloomIntensity: number
   /** Vignette darkness (0 = off) */
   vignetteDarkness: number
   /** Sky / ground tint for hemisphere fill */
@@ -208,7 +281,6 @@ export const DEFAULT_LIGHTING: LightingSettings = {
   contactShadows: true,
   exposure: 1.05,
   aoIntensity: 1.2,
-  bloomIntensity: 0.25,
   vignetteDarkness: 0.35,
   skyColor: '#c8d9e8',
   groundColor: '#8a7a65',
@@ -230,6 +302,7 @@ export type Selection =
   | { kind: 'vertex'; id: Id }
   | { kind: 'opening'; id: Id }
   | { kind: 'slabOpening'; id: Id }
+  | { kind: 'object'; id: Id }
   | { kind: 'room'; key: string }
   | { kind: 'multi'; vertexIds: Id[]; wallIds: Id[] }
   | null
@@ -315,6 +388,14 @@ export function selectedRoomKey(selection: Selection): string | null {
   return selection?.kind === 'room' ? selection.key : null
 }
 
+export function isObjectSelected(selection: Selection, id: Id): boolean {
+  return selection?.kind === 'object' && selection.id === id
+}
+
+export function selectedObjectId(selection: Selection): Id | null {
+  return selection?.kind === 'object' ? selection.id : null
+}
+
 export function defaultMaterialRef(assetId: string, tileSizeM = 1.5): MaterialRef {
   return { source: 'ambientcg', assetId, tileSizeM }
 }
@@ -342,6 +423,7 @@ export function createEmptyFloor(
     constraints: [],
     openings: [],
     slabOpenings: [],
+    objects: [],
   }
 }
 
@@ -481,6 +563,7 @@ export function ensureFloorOpenings(floor: Floor): Floor {
         : Math.max(0.05, Math.min(1, floor.slabThickness ?? 0.2)),
     openings: wallOpenings,
     slabOpenings: migratedSlabs,
+    objects: floor.objects ?? [],
   }
 }
 

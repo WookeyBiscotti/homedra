@@ -1,0 +1,80 @@
+{
+  "source": "nasa-3d-resources",
+  "mirror": "https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/",
+  "licenseNote": "NASA Images and Media Usage Guidelines — free to use; do not imply NASA endorsement. GLBs load via same-origin /proxy/ext (Vite) to avoid CORS.",
+  "count": 12,
+  "assets": [
+    {
+      "id": "apollo-lunar-module",
+      "title": "Apollo Lunar Module",
+      "path": "3D Models/Apollo Lunar Module/Apollo Lunar Module.glb",
+      "license": "NASA Media"
+    },
+    {
+      "id": "astronaut",
+      "title": "Astronaut",
+      "path": "3D Models/Astronaut/Astronaut.glb",
+      "license": "NASA Media"
+    },
+    {
+      "id": "perseverance",
+      "title": "Mars 2020 Perseverance Rover",
+      "path": "3D Models/Mars 2020 Perseverance Rover/Mars 2020 Perseverance Rover.glb",
+      "license": "NASA Media"
+    },
+    {
+      "id": "ingenuity",
+      "title": "Ingenuity Mars Helicopter",
+      "path": "3D Models/Ingenuity Mars Helicopter/Ingenuity Mars Helicopter.glb",
+      "license": "NASA Media"
+    },
+    {
+      "id": "hubble",
+      "title": "Hubble Space Telescope (A)",
+      "path": "3D Models/Hubble Space Telescope (A)/Hubble Space Telescope (A).glb",
+      "license": "NASA Media"
+    },
+    {
+      "id": "iss",
+      "title": "International Space Station (ISS) (A)",
+      "path": "3D Models/International Space Station (ISS) (A)/International Space Station (ISS) (A).glb",
+      "license": "NASA Media"
+    },
+    {
+      "id": "jwst",
+      "title": "James Webb Space Telescope (A)",
+      "path": "3D Models/James Webb Space Telescope (A)/James Webb Space Telescope (A).glb",
+      "license": "NASA Media"
+    },
+    {
+      "id": "juno",
+      "title": "Juno (A)",
+      "path": "3D Models/Juno (A)/Juno (A).glb",
+      "license": "NASA Media"
+    },
+    {
+      "id": "saturn-v",
+      "title": "Saturn V",
+      "path": "3D Models/Saturn V/Saturn V.glb",
+      "license": "NASA Media"
+    },
+    {
+      "id": "voyager",
+      "title": "Voyager Probe (A)",
+      "path": "3D Models/Voyager Probe (A)/Voyager Probe (A).glb",
+      "license": "NASA Media"
+    },
+    {
+      "id": "space-shuttle",
+      "title": "Space Shuttle (A)",
+      "path": "3D Models/Space Shuttle (A)/Space Shuttle (A).glb",
+      "license": "NASA Media"
+    },
+    {
+      "id": "gemini",
+      "title": "Gemini",
+      "path": "3D Models/Gemini/Gemini.glb",
+      "license": "NASA Media"
+    }
+  ]
+}

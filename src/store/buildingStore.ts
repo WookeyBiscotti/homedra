@@ -42,7 +42,10 @@ import {
   isStoryFloor,
   type LightingSettings,
   type MaterialRef,
+  type ModelAttribution,
+  type ModelRef,
   type OpeningKind,
+  type PlacedObject,
   recalcFloorElevations,
   type SceneMode,
   type Selection,
@@ -50,8 +53,10 @@ import {
   selectedWallIds,
   storyFloors,
   type Tool,
+  toolsForWorkbench,
   type ViewMode,
   type WallSide,
+  type Workbench,
   isWallOpeningTool,
   wallLength,
 } from '../engine/types'
@@ -75,10 +80,34 @@ function cloneBuilding(b: Building): Building {
   return structuredClone(b)
 }
 
+/** Read last saved project from localStorage, or null if missing/invalid. */
+function readStoredBuilding(): Building | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return null
+    const data = ensureBuildingOpenings(JSON.parse(raw) as Building)
+    if (!data.floors?.length) return null
+    return data
+  } catch {
+    return null
+  }
+}
+
+function createDemoBuilding(): Building {
+  const initial = ensureBuildingOpenings(createEmptyBuilding())
+  const firstStory = storyFloors(initial.floors)[0] ?? initial.floors[0]
+  const demo = seedDemoFloor(firstStory)
+  return {
+    ...initial,
+    floors: initial.floors.map((f) => (f.id === demo.id ? demo : f)),
+  }
+}
+
 interface BuildingState {
   building: Building
   activeFloorId: string
   tool: Tool
+  workbench: Workbench
   viewMode: ViewMode
   sceneMode: SceneMode
   paintBrush: MaterialRef | null
@@ -109,6 +138,7 @@ interface BuildingState {
   undo: () => void
   redo: () => void
   setTool: (tool: Tool) => void
+  setWorkbench: (workbench: Workbench) => void
   setViewMode: (mode: ViewMode) => void
   setSceneMode: (mode: SceneMode) => void
   setPaintBrush: (brush: MaterialRef | null) => void
@@ -166,6 +196,30 @@ interface BuildingState {
   ) => void
   /** Move slab opening by center (no history). */
   dragSlabOpening: (id: string, x: number, y: number) => void
+
+  /** Pending model to place with the placeObject tool (3D or 2D). */
+  pendingModel: {
+    model: ModelRef
+    attribution?: ModelAttribution
+  } | null
+  modelBrowserOpen: boolean
+  libraryTokensOpen: boolean
+  setModelBrowserOpen: (open: boolean) => void
+  setLibraryTokensOpen: (open: boolean) => void
+  setPendingModel: (
+    pending: {
+      model: ModelRef
+      attribution?: ModelAttribution
+    } | null,
+  ) => void
+  placeObjectAt: (x: number, y: number) => void
+  updatePlacedObject: (
+    id: string,
+    patch: Partial<Pick<PlacedObject, 'x' | 'y' | 'rotationY' | 'scale'>>,
+  ) => void
+  /** Drag placed object in plan (no history). */
+  dragPlacedObject: (id: string, x: number, y: number) => void
+  selectObject: (floorId: string, id: string) => void
 
   selectAt: (x: number, y: number) => void
   selectInRect: (minX: number, minY: number, maxX: number, maxY: number) => void
@@ -259,19 +313,15 @@ function replaceFloor(building: Building, floor: Floor): Building {
 }
 
 export const useBuildingStore = create<BuildingState>((set, get) => {
-  const initial = ensureBuildingOpenings(createEmptyBuilding())
-  // Demo rectangle on the first story
-  const firstStory = storyFloors(initial.floors)[0] ?? initial.floors[0]
-  const demo = seedDemoFloor(firstStory)
-  const building = {
-    ...initial,
-    floors: initial.floors.map((f) => (f.id === demo.id ? demo : f)),
-  }
+  // Cold start: restore last saved project; otherwise seed a demo building
+  const stored = readStoredBuilding()
+  const building = stored ?? createDemoBuilding()
 
   return {
     building,
     activeFloorId: storyFloors(building.floors)[0]?.id ?? building.floors[0].id,
     tool: 'select',
+    workbench: 'draft',
     viewMode: '2d',
     sceneMode: 'interior',
     paintBrush: null,
@@ -282,6 +332,9 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     wallDraftFrom: null,
     openingDraft: null,
     slabOpeningDraft: null,
+    pendingModel: null,
+    modelBrowserOpen: false,
+    libraryTokensOpen: false,
     history: [],
     future: [],
     statusMessage: null,
@@ -336,6 +389,30 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
 
     setTool: (tool) => {
       if (isGroundFloor(get().activeFloor()) && tool !== 'select') return
+      const { workbench } = get()
+      if (tool === 'placeObject') {
+        set({
+          workbench: 'furnish',
+          tool,
+          wallDraftFrom: null,
+          openingDraft: null,
+          slabOpeningDraft: null,
+          modelBrowserOpen: true,
+          sceneMode: get().sceneMode === 'paint' ? 'interior' : get().sceneMode,
+          statusMessage: null,
+        })
+        return
+      }
+      const allowed = toolsForWorkbench(workbench)
+      if (!allowed.includes(tool) && workbench !== 'draft') {
+        // Draft tools from shortcut while in another workbench → switch to draft
+        if (toolsForWorkbench('draft').includes(tool)) {
+          get().setWorkbench('draft')
+          get().setTool(tool)
+          return
+        }
+        return
+      }
       set({
         tool,
         wallDraftFrom: null,
@@ -344,8 +421,75 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         statusMessage: null,
       })
     },
-    setViewMode: (viewMode) => set({ viewMode }),
-    setSceneMode: (sceneMode) => set({ sceneMode }),
+    setWorkbench: (workbench) => {
+      const prev = get().sceneMode
+      const drafts = {
+        wallDraftFrom: null as string | null,
+        openingDraft: null,
+        slabOpeningDraft: null,
+        statusMessage: null as string | null,
+      }
+      if (workbench === 'draft') {
+        set({
+          workbench,
+          viewMode: '2d',
+          sceneMode: prev === 'paint' ? 'interior' : prev,
+          tool: 'select',
+          modelBrowserOpen: false,
+          ...drafts,
+        })
+        return
+      }
+      if (workbench === 'paint') {
+        set({
+          workbench,
+          viewMode: '3d',
+          sceneMode: 'paint',
+          tool: 'select',
+          pendingModel: null,
+          modelBrowserOpen: false,
+          ...drafts,
+        })
+        return
+      }
+      // furnish
+      set({
+        workbench,
+        viewMode: '3d',
+        sceneMode: prev === 'paint' ? 'interior' : prev,
+        tool: 'select',
+        ...drafts,
+      })
+    },
+    setViewMode: (viewMode) => {
+      const { workbench, sceneMode } = get()
+      // Paint only makes sense in 3D — leaving 3D exits paint workbench
+      if (viewMode === '2d' && workbench === 'paint') {
+        set({
+          viewMode,
+          workbench: 'draft',
+          sceneMode: 'interior',
+          tool: 'select',
+        })
+        return
+      }
+      if (viewMode === '2d' && sceneMode === 'paint') {
+        set({ viewMode, sceneMode: 'interior' })
+        return
+      }
+      set({ viewMode })
+    },
+    setSceneMode: (sceneMode) => {
+      if (sceneMode === 'paint') {
+        get().setWorkbench('paint')
+        return
+      }
+      const { workbench } = get()
+      set({
+        sceneMode,
+        ...(workbench === 'paint' ? { workbench: 'draft' as Workbench, tool: 'select' as Tool } : {}),
+      })
+    },
     setPaintBrush: (paintBrush) => set({ paintBrush }),
     setLighting: (patch) =>
       set({ lighting: { ...get().lighting, ...patch } }),
@@ -708,6 +852,94 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       })
     },
 
+    setModelBrowserOpen: (modelBrowserOpen) => set({ modelBrowserOpen }),
+    setLibraryTokensOpen: (libraryTokensOpen) => set({ libraryTokensOpen }),
+    setPendingModel: (pendingModel) =>
+      set({
+        pendingModel,
+        workbench: pendingModel ? 'furnish' : get().workbench,
+        tool: pendingModel ? 'placeObject' : get().tool,
+        modelBrowserOpen: false,
+        sceneMode:
+          pendingModel && get().sceneMode === 'paint'
+            ? 'interior'
+            : get().sceneMode,
+        statusMessage: pendingModel
+          ? 'Кликните на плане или полу в 3D, чтобы поставить модель'
+          : null,
+      }),
+
+    placeObjectAt: (x, y) => {
+      const pending = get().pendingModel
+      if (!pending) {
+        set({
+          statusMessage: 'Сначала выберите модель в каталоге',
+          modelBrowserOpen: true,
+        })
+        return
+      }
+      if (isGroundFloor(get().activeFloor())) {
+        set({ statusMessage: 'Модели ставятся на этаж, не на землю' })
+        return
+      }
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const obj: PlacedObject = {
+        id: createId('obj'),
+        model: pending.model,
+        x: snapToGrid(x),
+        y: snapToGrid(y),
+        rotationY: 0,
+        scale: 1,
+        attribution: pending.attribution,
+      }
+      const next: Floor = {
+        ...floor,
+        objects: [...(floor.objects ?? []), obj],
+      }
+      set({
+        building: replaceFloor(get().building, next),
+        selection: { kind: 'object', id: obj.id },
+        statusMessage: 'Объект размещён',
+      })
+    },
+
+    updatePlacedObject: (id, patch) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const next: Floor = {
+        ...floor,
+        objects: (floor.objects ?? []).map((o) =>
+          o.id === id ? { ...o, ...patch } : o,
+        ),
+      }
+      set({ building: replaceFloor(get().building, next) })
+    },
+
+    dragPlacedObject: (id, x, y) => {
+      const floor = get().activeFloor()
+      const next: Floor = {
+        ...floor,
+        objects: (floor.objects ?? []).map((o) =>
+          o.id === id ? { ...o, x, y } : o,
+        ),
+      }
+      set({
+        building: replaceFloor(get().building, next),
+        selection: { kind: 'object', id },
+      })
+    },
+
+    selectObject: (floorId, id) =>
+      set({
+        activeFloorId: floorId,
+        selection: { kind: 'object', id },
+        wallDraftFrom: null,
+        openingDraft: null,
+        slabOpeningDraft: null,
+        statusMessage: null,
+      }),
+
     updateOpening: (id, patch) => {
       get().pushHistory()
       const floor = get().activeFloor()
@@ -747,6 +979,13 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       const vertex = floor.vertices.find((v) => Math.hypot(v.x - x, v.y - y) <= 0.2)
       if (vertex) {
         set({ selection: { kind: 'vertex', id: vertex.id } })
+        return
+      }
+      const obj = (floor.objects ?? []).find(
+        (o) => Math.hypot(o.x - x, o.y - y) <= 0.35,
+      )
+      if (obj) {
+        set({ selection: { kind: 'object', id: obj.id } })
         return
       }
       const slab = hitSlabOpening(floor, x, y)
@@ -1479,6 +1718,11 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
             (o) => o.id !== selection.id,
           ),
         }
+      } else if (selection.kind === 'object') {
+        floor = {
+          ...floor,
+          objects: (floor.objects ?? []).filter((o) => o.id !== selection.id),
+        }
       } else if (selection.kind === 'wall') {
         floor = removeWall(floor, selection.id)
       } else if (selection.kind === 'vertex') {
@@ -1540,12 +1784,22 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     },
 
     loadLocal: () => {
-      const raw = localStorage.getItem(STORAGE_KEY)
-      if (!raw) {
+      const data = readStoredBuilding()
+      if (!data) {
         set({ statusMessage: 'Нет сохранённого проекта' })
         return false
       }
-      return get().importJson(raw)
+      get().pushHistory()
+      set({
+        building: data,
+        activeFloorId: storyFloors(data.floors)[0]?.id ?? data.floors[0].id,
+        selection: null,
+        conflict: false,
+        openingDraft: null,
+        slabOpeningDraft: null,
+        statusMessage: 'Проект загружен',
+      })
+      return true
     },
 
     exportJson: () => JSON.stringify(get().building, null, 2),
@@ -1601,6 +1855,7 @@ function seedDemoFloor(floor: Floor): Floor {
     walls: [w1, w2, w3, w4],
     openings: [],
     slabOpenings: [],
+    objects: [],
     constraints: [
       { id: createId('c'), type: 'fixedLength', wallId: w1.id, length: 6 },
       { id: createId('c'), type: 'fixedLength', wallId: w2.id, length: 4 },

@@ -1,0 +1,28 @@
+{
+  "source": "met-museum-open-access",
+  "note": "Offline mirror of Met 3D scan IDs. GLB hosted via Met/Vntana — URLs may change; prefer manual upload if download fails.",
+  "count": 3,
+  "assets": [
+    {
+      "id": "547802",
+      "title": "Met 3D sample (object 547802)",
+      "objectUrl": "https://www.metmuseum.org/art/collection/search/547802",
+      "license": "CC0",
+      "glbUrl": ""
+    },
+    {
+      "id": "544448",
+      "title": "Met 3D sample (object 544448)",
+      "objectUrl": "https://www.metmuseum.org/art/collection/search/544448",
+      "license": "CC0",
+      "glbUrl": ""
+    },
+    {
+      "id": "251492",
+      "title": "Met 3D sample (object 251492)",
+      "objectUrl": "https://www.metmuseum.org/art/collection/search/251492",
+      "license": "CC0",
+      "glbUrl": ""
+    }
+  ]
+}
