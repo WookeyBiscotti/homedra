@@ -171,6 +171,91 @@ function GlbInstance({
     return clone
   }, [gltf.scene, objectId, shadowsEnabled])
 
+  const clips = gltf.animations
+  const clipDuration = useMemo(() => {
+    if (!clips?.length) return 0
+    return Math.max(0, ...clips.map((c) => c.duration))
+  }, [clips])
+
+  const { mixer, actions } = useMemo(() => {
+    if (!clips?.length || clipDuration <= 0) {
+      return { mixer: null as THREE.AnimationMixer | null, actions: [] as THREE.AnimationAction[] }
+    }
+    const m = new THREE.AnimationMixer(scene)
+    const acts: THREE.AnimationAction[] = []
+    for (const clip of clips) {
+      const action = m.clipAction(clip)
+      action.play()
+      action.paused = true
+      acts.push(action)
+    }
+    return { mixer: m, actions: acts }
+  }, [scene, clips, clipDuration])
+
+  // Persist duration so PropertiesPanel can show the scrubber.
+  useEffect(() => {
+    if (clipDuration <= 0) {
+      if (obj.animationDuration != null && obj.animationDuration > 0) {
+        useBuildingStore.setState((st) => {
+          const floor = st.activeFloor()
+          const objects = (floor.objects ?? []).map((o) =>
+            o.id === obj.id
+              ? { ...o, animationDuration: undefined, animationTime: undefined }
+              : o,
+          )
+          return {
+            building: {
+              ...st.building,
+              floors: st.building.floors.map((f) =>
+                f.id === floor.id ? { ...f, objects } : f,
+              ),
+            },
+          }
+        })
+      }
+      return
+    }
+    const durationStale =
+      obj.animationDuration == null ||
+      Math.abs(obj.animationDuration - clipDuration) > 0.02
+    if (!durationStale) return
+    useBuildingStore.setState((st) => {
+      const floor = st.activeFloor()
+      const objects = (floor.objects ?? []).map((o) => {
+        if (o.id !== obj.id) return o
+        const t = Math.min(o.animationTime ?? 0, clipDuration)
+        return {
+          ...o,
+          animationDuration: clipDuration,
+          animationTime: t,
+        }
+      })
+      return {
+        building: {
+          ...st.building,
+          floors: st.building.floors.map((f) =>
+            f.id === floor.id ? { ...f, objects } : f,
+          ),
+        },
+      }
+    })
+  }, [clipDuration, obj.animationDuration, obj.id])
+
+  useLayoutEffect(() => {
+    if (!mixer || actions.length === 0) return
+    const t = Math.min(
+      Math.max(0, obj.animationTime ?? 0),
+      clipDuration || 0,
+    )
+    // paused + mixer.setTime is a no-op (timeScale 0); set action.time directly.
+    for (const action of actions) {
+      action.time = Math.min(t, action.getClip().duration)
+      action.paused = true
+    }
+    mixer.update(0)
+    invalidate()
+  }, [mixer, actions, obj.animationTime, clipDuration, invalidate])
+
   useApplyAppearance(scene, obj.appearance)
 
   useLayoutEffect(() => {

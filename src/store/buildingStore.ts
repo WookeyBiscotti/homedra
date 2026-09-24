@@ -291,6 +291,8 @@ interface BuildingState {
         | 'planHalfX'
         | 'planHalfY'
         | 'appearance'
+        | 'animationTime'
+        | 'animationDuration'
       >
     >,
   ) => void

@@ -10,6 +10,8 @@ import { hitAttribution, hitToModelRef } from '../models/types'
 import type { ModelAttribution, ModelRef } from '../engine/types'
 import {
   cacheRemoteGlb,
+  loadGltfFromBlob,
+  renderThumbsForSelections,
   uploadGlbFile,
   UploadValidationError,
 } from '../models/upload'
@@ -26,9 +28,10 @@ import {
   putItems,
   type CollectionFolder,
 } from '../models/collection'
-import type { ScenePart } from '../models/sceneParts'
+import type { ScenePart, SceneTreeNode } from '../models/sceneParts'
 import { useBuildingStore } from '../store/buildingStore'
 import { ModelPreview } from './ModelPreview'
+import { SceneTreePicker } from './SceneTreePicker'
 import {
   SizeCalibrateScene,
   type SizeCalibrateResult,
@@ -73,7 +76,9 @@ type PreviewState = {
   revokeOnDispose?: boolean
   variantId?: string
   objectId?: string
+  /** Nodes marked for explode-into-collection (checkboxes in the tree). */
   sceneParts: ScenePart[]
+  sceneTree: SceneTreeNode[]
 }
 
 /** Build a short list of page buttons around the current page. */
@@ -230,24 +235,56 @@ export function ModelBrowser() {
     void runSearch(query, p)
   }
 
-  const onPartsFound = useCallback((parts: ScenePart[]) => {
-    setPreview((prev) => {
-      if (!prev) return prev
-      const same =
-        prev.sceneParts.length === parts.length &&
-        prev.sceneParts.every((p, i) => p.id === parts[i]?.id)
-      const stillOk =
-        prev.objectId == null || parts.some((p) => p.id === prev.objectId)
-      if (same && stillOk) return prev
-      // Keep whole-scene selection (objectId undefined) or a still-valid part.
-      return {
-        ...prev,
-        sceneParts: parts,
-        objectId: stillOk ? prev.objectId : undefined,
-        ref: withObjectId(prev.ref, stillOk ? prev.objectId : undefined),
-      }
-    })
-  }, [])
+  const onSceneGraph = useCallback(
+    (tree: SceneTreeNode[], suggested: ScenePart[]) => {
+      setPreview((prev) => {
+        if (!prev) return prev
+        const treeIds = new Set<string>()
+        const collect = (nodes: SceneTreeNode[]) => {
+          for (const n of nodes) {
+            treeIds.add(n.id)
+            collect(n.children)
+          }
+        }
+        collect(tree)
+        const sameTree =
+          prev.sceneTree === tree ||
+          (prev.sceneTree.length === tree.length &&
+            prev.sceneTree.every((n, i) => n.id === tree[i]?.id))
+        const stillOk =
+          prev.objectId == null ||
+          treeIds.has(prev.objectId) ||
+          prev.objectId.startsWith('cluster:')
+        const kept = prev.sceneParts.filter(
+          (p) => treeIds.has(p.id) || p.id.startsWith('cluster:'),
+        )
+        const keptAreFragments =
+          kept.length > 24 ||
+          (kept.length > 0 &&
+            suggested.length >= 2 &&
+            suggested.length < kept.length &&
+            kept.every((p) => !p.id.startsWith('cluster:')))
+        const sceneParts =
+          prev.sceneParts.length === 0 || keptAreFragments
+            ? suggested
+            : kept
+        const sameParts =
+          prev.sceneParts.length === sceneParts.length &&
+          prev.sceneParts.every((p, i) => p.id === sceneParts[i]?.id)
+        if (sameTree && sameParts && stillOk) {
+          return prev.sceneTree === tree ? prev : { ...prev, sceneTree: tree }
+        }
+        return {
+          ...prev,
+          sceneTree: tree,
+          sceneParts,
+          objectId: stillOk ? prev.objectId : undefined,
+          ref: withObjectId(prev.ref, stillOk ? prev.objectId : undefined),
+        }
+      })
+    },
+    [],
+  )
 
   if (!open) return null
 
@@ -329,6 +366,7 @@ export function ModelBrowser() {
         variantId: resolved.variantId,
         objectId: resolved.objectId,
         sceneParts: [],
+        sceneTree: [],
       })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось загрузить превью')
@@ -399,6 +437,7 @@ export function ModelBrowser() {
         blob = await res.blob()
       }
       let thumbBlob: Blob | undefined
+      let partThumbs: Record<string, Blob> | undefined
       let bbox = folderPick.scale.bbox
       try {
         const cached = await cacheRemoteGlb({
@@ -409,6 +448,17 @@ export function ModelBrowser() {
         })
         thumbBlob = cached.thumbBlob
         if (!(bbox.x > 0)) bbox = cached.bbox
+        const thumbIds =
+          folderPick.mode === 'whole' && preview.sceneParts.length > 1
+            ? preview.sceneParts.map((p) => p.id)
+            : [preview.objectId]
+        const scene = await loadGltfFromBlob(cached.asset.blob)
+        const rendered = await renderThumbsForSelections(scene, thumbIds)
+        if (rendered.size > 0) {
+          partThumbs = Object.fromEntries(rendered)
+          const key = preview.objectId ?? ''
+          thumbBlob = rendered.get(key) ?? thumbBlob
+        }
       } catch (e) {
         // Non-GLB sources (e.g. Poly Haven glTF): keep collection item + source for re-fetch
         if (!(e instanceof UploadValidationError)) throw e
@@ -423,6 +473,7 @@ export function ModelBrowser() {
         bbox: bbox.x > 0 ? bbox : { x: 1, y: 1, z: 1 },
         source,
         thumbBlob,
+        partThumbs,
         objectId: preview.objectId,
         parts: preview.sceneParts,
         mode: folderPick.mode,
@@ -754,41 +805,22 @@ export function ModelBrowser() {
                   <ModelPreview
                     url={preview.url}
                     objectId={preview.objectId}
-                    onParts={onPartsFound}
+                    onSceneTree={onSceneGraph}
                   />
 
-                  {preview.sceneParts.length > 1 && (
-                    <div className="model-part-picker" role="listbox" aria-label="Части сцены">
-                      <span className="muted model-part-picker-label">
-                        В файле ({preview.sceneParts.length})
-                      </span>
-                      <div className="model-part-picker-list">
-                        <button
-                          type="button"
-                          role="option"
-                          aria-selected={!preview.objectId}
-                          className={!preview.objectId ? 'active' : undefined}
-                          onClick={() => onSelectPart(undefined)}
-                        >
-                          Всё
-                        </button>
-                        {preview.sceneParts.map((p) => (
-                          <button
-                            key={p.id}
-                            type="button"
-                            role="option"
-                            aria-selected={preview.objectId === p.id}
-                            className={
-                              preview.objectId === p.id ? 'active' : undefined
-                            }
-                            title={p.label}
-                            onClick={() => onSelectPart(p.id)}
-                          >
-                            {p.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                  {preview.sceneTree.length > 0 && (
+                    <SceneTreePicker
+                      key={preview.url}
+                      tree={preview.sceneTree}
+                      selectedId={preview.objectId}
+                      explodeParts={preview.sceneParts}
+                      onSelect={onSelectPart}
+                      onExplodePartsChange={(parts) =>
+                        setPreview((prev) =>
+                          prev ? { ...prev, sceneParts: parts } : prev,
+                        )
+                      }
+                    />
                   )}
 
                   <div className="model-preview-actions">
@@ -806,8 +838,8 @@ export function ModelBrowser() {
                   <p className="muted model-preview-hint">
                     {preview.hit.variants && preview.hit.variants.length > 1
                       ? 'Выберите файл, затем «В коллекцию» и настройте размер.'
-                      : preview.sceneParts.length > 1
-                        ? 'Выберите часть или оставьте «Всё» — весь ассет разобьётся на объекты в коллекции.'
+                      : preview.sceneTree.length > 0
+                        ? 'В дереве выберите уровень объектов (галочки / «Дети»). Превью — клик по узлу.'
                         : 'После добавления настройте размер по шкале в метрах.'}
                   </p>
                 </>

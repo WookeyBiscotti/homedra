@@ -31,8 +31,6 @@ export const sketchfabAdapter: LibraryAdapter = {
       downloadable: 'true',
       archives_flavours: 'false',
       count: String(limit),
-      // Sketchfab slugs: by, by-sa, by-nd, by-nc*, cc0, ed, st — not "cc-by".
-      licenses: 'cc0,by,by-sa',
     })
     if (opts.cursor) params.set('cursor', opts.cursor)
 

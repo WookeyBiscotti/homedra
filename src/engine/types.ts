@@ -277,6 +277,13 @@ export interface PlacedObject {
   attribution?: ModelAttribution
   /** Paint / texture overrides from collection or per-instance edit. */
   appearance?: ObjectAppearance
+  /**
+   * Pose time within the model's GLTF animation clips (seconds).
+   * Only meaningful when animationDuration > 0.
+   */
+  animationTime?: number
+  /** Longest clip duration in seconds; set when the GLB is first resolved. */
+  animationDuration?: number
 }
 
 /** Plan AABB half-extents from local size × scale × yaw (estimate). */
@@ -336,6 +343,8 @@ export function normalizePlacedObject(
     planHalfY: raw.planHalfY ?? estimated.y,
     attribution: raw.attribution,
     appearance: raw.appearance,
+    animationTime: raw.animationTime,
+    animationDuration: raw.animationDuration,
   }
 }
 

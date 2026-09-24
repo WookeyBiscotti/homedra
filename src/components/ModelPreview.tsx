@@ -1,4 +1,4 @@
-import { Canvas, useThree } from '@react-three/fiber'
+import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { OrbitControls, useGLTF } from '@react-three/drei'
 import {
   Component,
@@ -6,13 +6,17 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useRef,
+  useState,
   type ReactNode,
 } from 'react'
 import * as THREE from 'three'
 import {
   cloneSceneSelection,
+  buildSceneTree,
   listSceneParts,
   type ScenePart,
+  type SceneTreeNode,
 } from '../models/sceneParts'
 
 function normalizeRoot(root: THREE.Object3D): void {
@@ -26,23 +30,39 @@ function normalizeRoot(root: THREE.Object3D): void {
   root.updateMatrixWorld(true)
 }
 
+/** Load glTF hierarchy outside the Canvas so picking a part does not remount the tree. */
+function SceneGraphSync({
+  url,
+  onSceneTree,
+}: {
+  url: string
+  onSceneTree: (tree: SceneTreeNode[], suggested: ScenePart[]) => void
+}) {
+  const gltf = useGLTF(url)
+  const suggested = useMemo(() => listSceneParts(gltf.scene), [gltf.scene])
+  const tree = useMemo(() => buildSceneTree(gltf.scene), [gltf.scene])
+
+  useEffect(() => {
+    onSceneTree(tree, suggested)
+  }, [suggested, tree, onSceneTree])
+
+  return null
+}
+
 function PreviewMesh({
   url,
   objectId,
-  onParts,
+  playAnimation,
+  distanceMul,
 }: {
   url: string
   objectId?: string
-  onParts?: (parts: ScenePart[]) => void
+  playAnimation: boolean
+  distanceMul: number
 }) {
   const gltf = useGLTF(url)
-  const { camera, controls } = useThree()
-
-  const parts = useMemo(() => listSceneParts(gltf.scene), [gltf.scene])
-
-  useEffect(() => {
-    onParts?.(parts)
-  }, [parts, onParts])
+  const { camera, controls, invalidate } = useThree()
+  const baseDist = useRef(2)
 
   const scene = useMemo(() => {
     const clone = cloneSceneSelection(gltf.scene, objectId)
@@ -69,12 +89,51 @@ function PreviewMesh({
     return clone
   }, [gltf.scene, objectId])
 
+  const clips = gltf.animations
+  const { mixer, actions } = useMemo(() => {
+    if (!clips?.length) {
+      return {
+        mixer: null as THREE.AnimationMixer | null,
+        actions: [] as THREE.AnimationAction[],
+      }
+    }
+    const m = new THREE.AnimationMixer(scene)
+    const acts = clips.map((clip) => {
+      const action = m.clipAction(clip)
+      action.play()
+      action.paused = true
+      return action
+    })
+    return { mixer: m, actions: acts }
+  }, [scene, clips])
+
+  const hasAnimation = actions.length > 0
+
+  useLayoutEffect(() => {
+    if (!mixer || !hasAnimation) return
+    if (!playAnimation) {
+      for (const action of actions) {
+        action.time = 0
+        action.paused = true
+      }
+      mixer.update(0)
+      invalidate()
+    }
+  }, [playAnimation, mixer, actions, hasAnimation, invalidate])
+
+  useFrame((_, dt) => {
+    if (!mixer || !playAnimation) return
+    for (const action of actions) action.paused = false
+    mixer.update(dt)
+  })
+
   useLayoutEffect(() => {
     const box = new THREE.Box3().setFromObject(scene)
     const size = box.getSize(new THREE.Vector3())
     const center = box.getCenter(new THREE.Vector3())
     const maxDim = Math.max(size.x, size.y, size.z, 0.2)
-    const dist = maxDim * 2.2
+    baseDist.current = maxDim * 2.2
+    const dist = baseDist.current * distanceMul
     const cam = camera as THREE.PerspectiveCamera
     cam.position.set(
       center.x + dist * 0.75,
@@ -82,7 +141,7 @@ function PreviewMesh({
       center.z + dist * 0.75,
     )
     cam.near = Math.max(0.01, maxDim / 100)
-    cam.far = Math.max(100, maxDim * 50)
+    cam.far = Math.max(200, maxDim * 80 * distanceMul)
     cam.updateProjectionMatrix()
     cam.lookAt(center)
     const ctrl = controls as
@@ -92,7 +151,8 @@ function PreviewMesh({
       ctrl.target.copy(center)
       ctrl.update?.()
     }
-  }, [scene, camera, controls])
+    invalidate()
+  }, [scene, camera, controls, distanceMul, invalidate])
 
   return <primitive object={scene} />
 }
@@ -139,6 +199,20 @@ function PreviewLights() {
   )
 }
 
+function PreviewHasAnimation({
+  url,
+  onChange,
+}: {
+  url: string
+  onChange: (has: boolean) => void
+}) {
+  const gltf = useGLTF(url)
+  useEffect(() => {
+    onChange((gltf.animations?.length ?? 0) > 0)
+  }, [gltf.animations, onChange])
+  return null
+}
+
 /**
  * Interactive GLB preview with fixed-size canvas and auto-framing.
  * Supports picking a sub-object when the file contains several models.
@@ -146,35 +220,95 @@ function PreviewLights() {
 export function ModelPreview({
   url,
   objectId,
-  onParts,
+  onSceneTree,
   className,
   onError,
 }: {
   url: string
   objectId?: string
-  onParts?: (parts: ScenePart[]) => void
+  onSceneTree?: (tree: SceneTreeNode[], suggested: ScenePart[]) => void
   className?: string
   onError?: (msg: string) => void
 }) {
+  const [playAnimation, setPlayAnimation] = useState(false)
+  const [hasAnimation, setHasAnimation] = useState(false)
+  const [distanceMul, setDistanceMul] = useState(1)
+
+  useEffect(() => {
+    setPlayAnimation(false)
+    setDistanceMul(1)
+    setHasAnimation(false)
+  }, [url])
+
   return (
     <div className={className ?? 'model-preview'}>
-      <PreviewErrorBoundary key={`${url}::${objectId ?? ''}`} onError={onError}>
+      {onSceneTree && (
+        <Suspense fallback={null}>
+          <SceneGraphSync url={url} onSceneTree={onSceneTree} />
+        </Suspense>
+      )}
+      <div className="model-preview-toolbar">
+        {hasAnimation && (
+          <button
+            type="button"
+            className={playAnimation ? 'active' : undefined}
+            aria-pressed={playAnimation}
+            title={playAnimation ? 'Остановить анимацию' : 'Включить анимацию'}
+            onClick={() => setPlayAnimation((p) => !p)}
+          >
+            {playAnimation ? 'Стоп' : 'Анимация'}
+          </button>
+        )}
+        <button
+          type="button"
+          title="Отдалить"
+          aria-label="Отдалить"
+          onClick={() => setDistanceMul((d) => Math.min(12, +(d * 1.45).toFixed(2)))}
+        >
+          −
+        </button>
+        <button
+          type="button"
+          title="Приблизить"
+          aria-label="Приблизить"
+          onClick={() => setDistanceMul((d) => Math.max(0.45, +(d / 1.45).toFixed(2)))}
+        >
+          +
+        </button>
+        {distanceMul !== 1 && (
+          <button
+            type="button"
+            className="ghost"
+            title="Сбросить дистанцию"
+            onClick={() => setDistanceMul(1)}
+          >
+            Сброс
+          </button>
+        )}
+      </div>
+      <PreviewErrorBoundary key={url} onError={onError}>
         <Canvas
-          camera={{ position: [2, 1.5, 2], fov: 40, near: 0.01, far: 200 }}
+          camera={{ position: [2, 1.5, 2], fov: 40, near: 0.01, far: 500 }}
           dpr={[1, 1.5]}
           gl={{ antialias: true, alpha: false }}
           style={{ width: '100%', height: '100%' }}
         >
           <PreviewLights />
           <Suspense fallback={null}>
-            <PreviewMesh url={url} objectId={objectId} onParts={onParts} />
+            <PreviewHasAnimation url={url} onChange={setHasAnimation} />
+            <PreviewMesh
+              url={url}
+              objectId={objectId}
+              playAnimation={playAnimation}
+              distanceMul={distanceMul}
+            />
           </Suspense>
           <OrbitControls
             makeDefault
-            enablePan={false}
-            minDistance={0.3}
-            maxDistance={80}
-            autoRotate
+            enablePan
+            minDistance={0.15}
+            maxDistance={400}
+            autoRotate={!playAnimation}
             autoRotateSpeed={1.4}
           />
         </Canvas>

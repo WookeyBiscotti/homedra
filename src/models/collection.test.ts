@@ -61,6 +61,23 @@ describe('buildCollectionItems', () => {
     expect(items.every((i) => i.defaultScale === 0.5)).toBe(true)
   })
 
+  it('uses a per-part pictogram instead of the whole-asset thumb', () => {
+    const partA = new Blob(['a'], { type: 'image/webp' })
+    const partB = new Blob(['b'], { type: 'image/webp' })
+    const items = buildCollectionItems({
+      ...base,
+      mode: 'whole',
+      thumbBlob: new Blob(['whole'], { type: 'image/webp' }),
+      partThumbs: { 'name:A': partA, 'name:B': partB },
+      parts: [
+        { id: 'name:A', label: 'A' },
+        { id: 'name:B', label: 'B' },
+      ],
+    })
+    expect(items[0]!.thumbBlob).toBe(partA)
+    expect(items[1]!.thumbBlob).toBe(partB)
+  })
+
   it('falls back to single when parts < 2 even in whole mode', () => {
     const items = buildCollectionItems({
       ...base,

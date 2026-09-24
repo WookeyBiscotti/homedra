@@ -178,6 +178,8 @@ export type ExplodeSpec = {
   bbox: { x: number; y: number; z: number }
   source: CollectionSource
   thumbBlob?: Blob
+  /** Per-part pictograms keyed by objectId (`''` = whole scene). */
+  partThumbs?: Record<string, Blob>
   /** When adding one part only. */
   objectId?: string
   /** When adding whole asset — explode into these parts (empty = single whole). */
@@ -202,7 +204,8 @@ export function buildCollectionItems(spec: ExplodeSpec): CollectionItem[] {
         defaultScale: spec.defaultScale,
         bbox: spec.bbox,
         source: spec.source,
-        thumbBlob: spec.thumbBlob,
+        thumbBlob:
+          spec.partThumbs?.[spec.objectId ?? ''] ?? spec.thumbBlob,
         createdAt: now,
       },
     ]
@@ -217,7 +220,8 @@ export function buildCollectionItems(spec: ExplodeSpec): CollectionItem[] {
     defaultScale: spec.defaultScale,
     bbox: spec.bbox,
     source: spec.source,
-    thumbBlob: i === 0 ? spec.thumbBlob : undefined,
+    thumbBlob:
+      spec.partThumbs?.[part.id] ?? (i === 0 ? spec.thumbBlob : undefined),
     createdAt: now + i,
   }))
 }

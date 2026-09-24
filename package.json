@@ -22,6 +22,7 @@
     "react-dom": "^19.2.8",
     "react-konva": "^19.2.2",
     "three": "^0.186.0",
+    "web-ifc": "^0.0.78",
     "zustand": "^5.0.15"
   },
   "devDependencies": {

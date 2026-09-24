@@ -61,6 +61,7 @@ export function PropertiesPanel() {
   const updateFloorPlate = useBuildingStore((s) => s.updateFloorPlate)
   const setFloorPlateMaterial = useBuildingStore((s) => s.setFloorPlateMaterial)
   const updatePlacedObject = useBuildingStore((s) => s.updatePlacedObject)
+  const pushHistory = useBuildingStore((s) => s.pushHistory)
   const copyFromPreviousFloor = useBuildingStore((s) => s.copyFromPreviousFloor)
   const conflict = useBuildingStore((s) => s.conflict)
   const statusMessage = useBuildingStore((s) => s.statusMessage)
@@ -595,6 +596,49 @@ export function PropertiesPanel() {
               }
             />
           </label>
+          {(placedObject.animationDuration ?? 0) > 0 && (
+            <label>
+              Кадр анимации
+              <input
+                type="range"
+                min={0}
+                max={placedObject.animationDuration}
+                step={0.01}
+                value={Math.min(
+                  placedObject.animationTime ?? 0,
+                  placedObject.animationDuration!,
+                )}
+                onPointerDown={() => pushHistory()}
+                onChange={(e) => {
+                  const animationTime = Number(e.target.value)
+                  useBuildingStore.setState((st) => {
+                    const f = st.activeFloor()
+                    return {
+                      building: {
+                        ...st.building,
+                        floors: st.building.floors.map((floor) =>
+                          floor.id !== f.id
+                            ? floor
+                            : {
+                                ...floor,
+                                objects: (floor.objects ?? []).map((o) =>
+                                  o.id === placedObject.id
+                                    ? { ...o, animationTime }
+                                    : o,
+                                ),
+                              },
+                        ),
+                      },
+                    }
+                  })
+                }}
+              />
+              <span className="muted">
+                {(placedObject.animationTime ?? 0).toFixed(2)} с /{' '}
+                {placedObject.animationDuration!.toFixed(2)} с
+              </span>
+            </label>
+          )}
           <p className="muted">
             Drag — перемещение. Двойной клик по объекту — смена режима gizmo
             (двигать / вращать / масштаб).
