@@ -1,5 +1,7 @@
 import { useBuildingStore } from '../store/buildingStore'
+import { ElectricalWorkbench } from './ElectricalWorkbench'
 import { FurnishWorkbench } from './FurnishWorkbench'
+import { PlumbingWorkbench } from './PlumbingWorkbench'
 import { Toolbar } from './Toolbar'
 import { PaintWorkbench } from './View3D/PaintWorkbench'
 
@@ -12,6 +14,10 @@ export function WorkbenchRail() {
       return <PaintWorkbench />
     case 'furnish':
       return <FurnishWorkbench />
+    case 'plumbing':
+      return <PlumbingWorkbench />
+    case 'electrical':
+      return <ElectricalWorkbench />
     case 'draft':
     default:
       return <Toolbar />

@@ -133,6 +133,179 @@ export interface FloorPlate {
   material?: MaterialRef | null
 }
 
+/** Hidden MEP route: inside a wall or inside the floor slab. */
+export type MepAnchor =
+  | { type: 'wall'; wallId: Id; offset: number }
+  | { type: 'slab'; x: number; y: number }
+
+export type PipeMedium = 'coldWater' | 'hotWater' | 'sewage' | 'gas'
+export type PipeFixtureKind = 'valve' | 'heater'
+export type ElectricalDeviceKind = 'outlet' | 'switch' | 'panel'
+
+export interface PipeNode {
+  id: Id
+  anchor: MepAnchor
+  /** Height above walking surface; wall nodes only. */
+  elevation?: number
+  fixture?: PipeFixtureKind
+}
+
+export interface PipeSegment {
+  id: Id
+  a: Id
+  b: Id
+  medium: PipeMedium
+  /** Outer diameter, millimeters. */
+  diameterMm: number
+}
+
+export interface PipeNetwork {
+  nodes: PipeNode[]
+  segments: PipeSegment[]
+}
+
+export interface ElectricalNode {
+  id: Id
+  anchor: MepAnchor
+  /** Height above walking surface; wall nodes only. */
+  elevation?: number
+  device?: ElectricalDeviceKind
+  /** Wall face the device sits on (centerline left-hand normal = pos). */
+  side?: WallSide
+  /** Face width along the wall, meters. */
+  width?: number
+  /** Face height, meters. */
+  height?: number
+  /** How far the device sticks out of the wall, meters. */
+  depth?: number
+}
+
+export interface CableSegment {
+  id: Id
+  a: Id
+  b: Id
+  /** Conductor cross-section, mm². */
+  sectionMm2: number
+}
+
+export interface CableNetwork {
+  nodes: ElectricalNode[]
+  segments: CableSegment[]
+}
+
+export const PIPE_MEDIUM_META: Record<
+  PipeMedium,
+  { label: string; color: string; diameterMm: number; elevation: number }
+> = {
+  coldWater: {
+    label: 'Холодная',
+    color: '#2b6cb0',
+    diameterMm: 20,
+    elevation: 0.3,
+  },
+  hotWater: {
+    label: 'Горячая',
+    color: '#c53030',
+    diameterMm: 20,
+    elevation: 0.3,
+  },
+  sewage: {
+    label: 'Канализация',
+    color: '#744210',
+    diameterMm: 50,
+    elevation: 0.1,
+  },
+  gas: {
+    label: 'Газ',
+    color: '#d69e2e',
+    diameterMm: 20,
+    elevation: 0.3,
+  },
+}
+
+export const CABLE_META = {
+  label: 'Кабель',
+  color: '#dd6b20',
+  sectionMm2: 2.5,
+  elevation: 0.3,
+} as const
+
+export const ELECTRICAL_DEVICE_ELEVATION: Record<ElectricalDeviceKind, number> =
+  {
+    outlet: 0.3,
+    switch: 0.3,
+    panel: 1.4,
+  }
+
+export const ELECTRICAL_DEVICE_SIZE: Record<
+  ElectricalDeviceKind,
+  { width: number; height: number; depth: number }
+> = {
+  outlet: { width: 0.086, height: 0.086, depth: 0.014 },
+  switch: { width: 0.086, height: 0.086, depth: 0.014 },
+  panel: { width: 0.28, height: 0.45, depth: 0.08 },
+}
+
+export function electricalDeviceSize(node: ElectricalNode): {
+  width: number
+  height: number
+  depth: number
+} {
+  const fallback = node.device
+    ? ELECTRICAL_DEVICE_SIZE[node.device]
+    : { width: 0.045, height: 0.045, depth: 0.045 }
+  return {
+    width: node.width ?? fallback.width,
+    height: node.height ?? fallback.height,
+    depth: node.depth ?? fallback.depth,
+  }
+}
+
+export function emptyPipeNetwork(): PipeNetwork {
+  return { nodes: [], segments: [] }
+}
+
+export function emptyCableNetwork(): CableNetwork {
+  return { nodes: [], segments: [] }
+}
+
+export function ensurePipeNetwork(
+  raw?: PipeNetwork | null,
+): PipeNetwork {
+  return {
+    nodes: [...(raw?.nodes ?? [])],
+    segments: [...(raw?.segments ?? [])],
+  }
+}
+
+export function ensureCableNetwork(
+  raw?: CableNetwork | null,
+): CableNetwork {
+  return {
+    nodes: [...(raw?.nodes ?? [])],
+    segments: [...(raw?.segments ?? [])],
+  }
+}
+
+export function pipeMediumLabel(medium: PipeMedium): string {
+  return PIPE_MEDIUM_META[medium].label
+}
+
+export function pipeFixtureLabel(kind: PipeFixtureKind): string {
+  return kind === 'valve' ? 'Перекрытие' : 'Нагреватель'
+}
+
+export function electricalDeviceLabel(kind: ElectricalDeviceKind): string {
+  switch (kind) {
+    case 'outlet':
+      return 'Розетка'
+    case 'switch':
+      return 'Выключатель'
+    case 'panel':
+      return 'Щиток'
+  }
+}
+
 /** Terrain level vs. a normal story with walls/slab. */
 export type FloorKind = 'ground' | 'story'
 
@@ -194,6 +367,10 @@ export interface Floor {
   roomFloorMaterials?: Record<string, MaterialRef>
   /** Placed 3D objects (furniture / props) on this floor. */
   objects?: PlacedObject[]
+  /** Plumbing graph (water / sewage / gas). */
+  pipes?: PipeNetwork
+  /** Electrical graph (cables + devices). */
+  cables?: CableNetwork
 }
 
 /** Reference to a mesh asset; binaries live outside project JSON. */
@@ -371,6 +548,13 @@ export type Tool =
   | 'horizontal'
   | 'vertical'
   | 'wallDistance'
+  | 'pipe'
+  | 'pipeValve'
+  | 'pipeHeater'
+  | 'cable'
+  | 'outlet'
+  | 'switch'
+  | 'panel'
 
 export type ViewMode = '2d' | '3d'
 export type SceneMode = 'interior' | 'exterior' | 'visit' | 'paint'
@@ -380,8 +564,10 @@ export type SceneMode = 'interior' | 'exterior' | 'visit' | 'paint'
  * - draft: floor plan (walls, openings, constraints)
  * - paint: materials brush in 3D
  * - furnish: place / edit 3D objects
+ * - plumbing: pipes in walls / slab
+ * - electrical: cables, outlets, switches, panels
  */
-export type Workbench = 'draft' | 'paint' | 'furnish'
+export type Workbench = 'draft' | 'paint' | 'furnish' | 'plumbing' | 'electrical'
 
 export const DRAFT_TOOLS: readonly Tool[] = [
   'select',
@@ -400,6 +586,21 @@ export const DRAFT_TOOLS: readonly Tool[] = [
 
 export const FURNISH_TOOLS: readonly Tool[] = ['select', 'placeObject']
 
+export const PLUMBING_TOOLS: readonly Tool[] = [
+  'select',
+  'pipe',
+  'pipeValve',
+  'pipeHeater',
+]
+
+export const ELECTRICAL_TOOLS: readonly Tool[] = [
+  'select',
+  'cable',
+  'outlet',
+  'switch',
+  'panel',
+]
+
 export function toolsForWorkbench(workbench: Workbench): readonly Tool[] {
   switch (workbench) {
     case 'draft':
@@ -408,7 +609,44 @@ export function toolsForWorkbench(workbench: Workbench): readonly Tool[] {
       return FURNISH_TOOLS
     case 'paint':
       return ['select']
+    case 'plumbing':
+      return PLUMBING_TOOLS
+    case 'electrical':
+      return ELECTRICAL_TOOLS
   }
+}
+
+export function isPlumbingTool(tool: Tool): boolean {
+  return (
+    tool === 'pipe' || tool === 'pipeValve' || tool === 'pipeHeater'
+  )
+}
+
+export function isElectricalTool(tool: Tool): boolean {
+  return (
+    tool === 'cable' ||
+    tool === 'outlet' ||
+    tool === 'switch' ||
+    tool === 'panel'
+  )
+}
+
+export function isMepDrawTool(tool: Tool): boolean {
+  return tool === 'pipe' || tool === 'cable'
+}
+
+export function isMepFixtureTool(tool: Tool): boolean {
+  return (
+    tool === 'pipeValve' ||
+    tool === 'pipeHeater' ||
+    tool === 'outlet' ||
+    tool === 'switch' ||
+    tool === 'panel'
+  )
+}
+
+export function isMepWorkbench(workbench: Workbench): boolean {
+  return workbench === 'plumbing' || workbench === 'electrical'
 }
 
 /** Global / sun lighting for the 3D viewport (not part of building JSON). */
@@ -471,6 +709,10 @@ export type Selection =
   | { kind: 'slabOpening'; id: Id }
   | { kind: 'floorPlate'; id: Id }
   | { kind: 'object'; id: Id }
+  | { kind: 'pipeSegment'; id: Id }
+  | { kind: 'pipeNode'; id: Id }
+  | { kind: 'cableSegment'; id: Id }
+  | { kind: 'electricalNode'; id: Id }
   | { kind: 'room'; key: string }
   | { kind: 'multi'; vertexIds: Id[]; wallIds: Id[] }
   | null
@@ -572,6 +814,22 @@ export function selectedObjectId(selection: Selection): Id | null {
   return selection?.kind === 'object' ? selection.id : null
 }
 
+export function isPipeSegmentSelected(selection: Selection, id: Id): boolean {
+  return selection?.kind === 'pipeSegment' && selection.id === id
+}
+
+export function isPipeNodeSelected(selection: Selection, id: Id): boolean {
+  return selection?.kind === 'pipeNode' && selection.id === id
+}
+
+export function isCableSegmentSelected(selection: Selection, id: Id): boolean {
+  return selection?.kind === 'cableSegment' && selection.id === id
+}
+
+export function isElectricalNodeSelected(selection: Selection, id: Id): boolean {
+  return selection?.kind === 'electricalNode' && selection.id === id
+}
+
 export function defaultMaterialRef(assetId: string, tileSizeM = 1.5): MaterialRef {
   return { source: 'ambientcg', assetId, tileSizeM }
 }
@@ -601,6 +859,8 @@ export function createEmptyFloor(
     slabOpenings: [],
     plates: [],
     objects: [],
+    pipes: emptyPipeNetwork(),
+    cables: emptyCableNetwork(),
   }
 }
 
@@ -744,6 +1004,8 @@ export function ensureFloorOpenings(floor: Floor): Floor {
     objects: (floor.objects ?? []).map((o) =>
       normalizePlacedObject(o as PlacedObject & { scale?: number }),
     ),
+    pipes: ensurePipeNetwork(floor.pipes),
+    cables: ensureCableNetwork(floor.cables),
   }
 }
 

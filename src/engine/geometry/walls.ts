@@ -1,5 +1,6 @@
 import type { Constraint, Floor, Id, Vertex, Wall } from '../types'
 import { createId } from '../types'
+import { reassignMepAfterWallSplit, detachMepFromWall } from './mep'
 import { reassignOpeningsAfterSplit, removeOpeningsForWall } from './openings'
 
 export const SNAP_GRID = 0.25
@@ -305,6 +306,7 @@ export function splitWallAt(
     constraints,
   }
   next = reassignOpeningsAfterSplit(next, wallId, wall1, wall2, len1)
+  next = reassignMepAfterWallSplit(next, wallId, wall1, wall2, len1)
   next = ensureConnectedVerticesCoincident(next)
   const v = next.vertices.find((p) => p.id === vertex.id) ?? vertex
   return { floor: next, vertex: v }
@@ -433,9 +435,10 @@ export function pruneOrphanVertices(floor: Floor): Floor {
 }
 
 export function removeWall(floor: Floor, wallId: Id): Floor {
+  const detached = detachMepFromWall(floor, wallId)
   const next: Floor = removeOpeningsForWall(
     {
-      ...floor,
+      ...detached,
       walls: floor.walls.filter((w) => w.id !== wallId),
       constraints: floor.constraints.filter((c) => {
         if (c.type === 'fixedLength' || c.type === 'horizontal' || c.type === 'vertical') {

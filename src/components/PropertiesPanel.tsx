@@ -16,7 +16,8 @@ import {
   wallsShareAxis,
   type WallFace,
 } from '../engine/geometry/wallSolid'
-import { selectedVertexIds, selectedWallIds, openingKindLabel, slabOpeningKindLabel, isGroundFloor, isStoryFloor, wallLength } from '../engine/types'
+import { selectedVertexIds, selectedWallIds, openingKindLabel, slabOpeningKindLabel, isGroundFloor, isStoryFloor, wallLength, PIPE_MEDIUM_META, electricalDeviceLabel, electricalDeviceSize, ensureCableNetwork, ensurePipeNetwork, pipeFixtureLabel, pipeMediumLabel, type PipeMedium, type WallSide } from '../engine/types'
+import { segmentEmbed, segmentLength } from '../engine/geometry/mep'
 import { useBuildingStore } from '../store/buildingStore'
 import { ConstraintsList } from './ConstraintsList'
 import { CopyFloorOptionsForm } from './CopyFloorOptionsForm'
@@ -61,6 +62,11 @@ export function PropertiesPanel() {
   const updateFloorPlate = useBuildingStore((s) => s.updateFloorPlate)
   const setFloorPlateMaterial = useBuildingStore((s) => s.setFloorPlateMaterial)
   const updatePlacedObject = useBuildingStore((s) => s.updatePlacedObject)
+  const updatePipeSegment = useBuildingStore((s) => s.updatePipeSegment)
+  const updatePipeNode = useBuildingStore((s) => s.updatePipeNode)
+  const setPipeDiameterMm = useBuildingStore((s) => s.setPipeDiameterMm)
+  const updateCableSegment = useBuildingStore((s) => s.updateCableSegment)
+  const updateElectricalNode = useBuildingStore((s) => s.updateElectricalNode)
   const pushHistory = useBuildingStore((s) => s.pushHistory)
   const copyFromPreviousFloor = useBuildingStore((s) => s.copyFromPreviousFloor)
   const conflict = useBuildingStore((s) => s.conflict)
@@ -71,6 +77,8 @@ export function PropertiesPanel() {
   const isDraft = workbench === 'draft'
   const isPaint = workbench === 'paint'
   const isFurnish = workbench === 'furnish'
+  const isPlumbing = workbench === 'plumbing'
+  const isElectrical = workbench === 'electrical'
 
   const stories = building.floors.filter(isStoryFloor)
   const ground = building.floors.find(isGroundFloor)
@@ -192,10 +200,57 @@ export function PropertiesPanel() {
     setShowCopyFromPrev(false)
   }
 
+  const pipes = ensurePipeNetwork(floor.pipes)
+  const cables = ensureCableNetwork(floor.cables)
+  const pipeSeg =
+    selection?.kind === 'pipeSegment'
+      ? pipes.segments.find((s) => s.id === selection.id) ?? null
+      : null
+  const pipeNode =
+    selection?.kind === 'pipeNode'
+      ? pipes.nodes.find((n) => n.id === selection.id) ?? null
+      : null
+  const pipeNodeSegs = pipeNode
+    ? pipes.segments.filter((s) => s.a === pipeNode.id || s.b === pipeNode.id)
+    : []
+  const pipeNodeDiameter =
+    pipeNodeSegs.length > 0 &&
+    pipeNodeSegs.every((s) => s.diameterMm === pipeNodeSegs[0].diameterMm)
+      ? pipeNodeSegs[0].diameterMm
+      : ''
+  const cableSeg =
+    selection?.kind === 'cableSegment'
+      ? cables.segments.find((s) => s.id === selection.id) ?? null
+      : null
+  const elecNode =
+    selection?.kind === 'electricalNode'
+      ? cables.nodes.find((n) => n.id === selection.id) ?? null
+      : null
+  const pipeSegEnds = pipeSeg
+    ? {
+        a: pipes.nodes.find((n) => n.id === pipeSeg.a),
+        b: pipes.nodes.find((n) => n.id === pipeSeg.b),
+      }
+    : null
+  const cableSegEnds = cableSeg
+    ? {
+        a: cables.nodes.find((n) => n.id === cableSeg.a),
+        b: cables.nodes.find((n) => n.id === cableSeg.b),
+      }
+    : null
+
   return (
     <aside className="properties">
       <h2 className="panel-title">
-        {isPaint ? 'Текстуры' : isFurnish ? 'Объект' : 'Свойства'}
+        {isPaint
+          ? 'Текстуры'
+          : isFurnish
+            ? 'Объект'
+            : isPlumbing
+              ? 'Трубы'
+              : isElectrical
+                ? 'Электрика'
+                : 'Свойства'}
       </h2>
 
       {(conflict || statusMessage) && (
@@ -203,6 +258,282 @@ export function PropertiesPanel() {
           {statusMessage ?? 'Конфликт ограничений'}
         </div>
       )}
+
+      {(isPlumbing || isElectrical) && pipeSeg && pipeSegEnds?.a && pipeSegEnds.b && (
+        <section className="prop-section">
+          <h3>Участок трубы</h3>
+          <label>
+            Среда
+            <select
+              value={pipeSeg.medium}
+              onChange={(e) =>
+                updatePipeSegment(pipeSeg.id, {
+                  medium: e.target.value as PipeMedium,
+                })
+              }
+            >
+              {(Object.keys(PIPE_MEDIUM_META) as PipeMedium[]).map((m) => (
+                <option key={m} value={m}>
+                  {pipeMediumLabel(m)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Диаметр, мм
+            <input
+              type="number"
+              min={6}
+              max={200}
+              step={1}
+              value={pipeSeg.diameterMm}
+              onChange={(e) =>
+                updatePipeSegment(pipeSeg.id, {
+                  diameterMm: Number(e.target.value),
+                })
+              }
+            />
+          </label>
+          <p className="muted">
+            Длина {segmentLength(floor, pipeSegEnds.a, pipeSegEnds.b).toFixed(2)} м
+            {' · '}
+            {segmentEmbed(floor, pipeSegEnds.a, pipeSegEnds.b) === 'wall'
+              ? 'в стене'
+              : segmentEmbed(floor, pipeSegEnds.a, pipeSegEnds.b) === 'slab'
+                ? 'в полу'
+                : 'стена ↔ пол'}
+          </p>
+        </section>
+      )}
+
+      {(isPlumbing || isElectrical) && pipeNode && (
+        <section className="prop-section">
+          <h3>Узел трубы</h3>
+          {pipeNode.anchor.type === 'wall' ? (
+            <>
+              <p className="muted">
+                В стене · смещение {pipeNode.anchor.offset.toFixed(2)} м
+              </p>
+              <label>
+                Высота, м
+                <input
+                  type="number"
+                  min={0}
+                  max={5}
+                  step={0.05}
+                  value={pipeNode.elevation ?? 0}
+                  onChange={(e) =>
+                    updatePipeNode(pipeNode.id, {
+                      elevation: Number(e.target.value),
+                    })
+                  }
+                />
+              </label>
+            </>
+          ) : (
+            <p className="muted">
+              В плите · X {pipeNode.anchor.x.toFixed(2)} · Y{' '}
+              {pipeNode.anchor.y.toFixed(2)}
+            </p>
+          )}
+          {pipeNodeSegs.length > 0 && (
+            <label>
+              Диаметр труб, мм
+              <input
+                type="number"
+                min={6}
+                max={200}
+                step={1}
+                value={pipeNodeDiameter}
+                onChange={(e) => setPipeDiameterMm(Number(e.target.value))}
+              />
+            </label>
+          )}
+          <label>
+            Прибор
+            <select
+              value={pipeNode.fixture ?? ''}
+              onChange={(e) =>
+                updatePipeNode(pipeNode.id, {
+                  fixture: (e.target.value || undefined) as
+                    | 'valve'
+                    | 'heater'
+                    | undefined,
+                })
+              }
+            >
+              <option value="">Нет</option>
+              <option value="valve">{pipeFixtureLabel('valve')}</option>
+              <option value="heater">{pipeFixtureLabel('heater')}</option>
+            </select>
+          </label>
+        </section>
+      )}
+
+      {(isPlumbing || isElectrical) && cableSeg && cableSegEnds?.a && cableSegEnds.b && (
+        <section className="prop-section">
+          <h3>Участок кабеля</h3>
+          <label>
+            Сечение, мм²
+            <input
+              type="number"
+              min={0.75}
+              max={50}
+              step={0.25}
+              value={cableSeg.sectionMm2}
+              onChange={(e) =>
+                updateCableSegment(cableSeg.id, {
+                  sectionMm2: Number(e.target.value),
+                })
+              }
+            />
+          </label>
+          <p className="muted">
+            Длина {segmentLength(floor, cableSegEnds.a, cableSegEnds.b).toFixed(2)} м
+            {' · '}
+            {segmentEmbed(floor, cableSegEnds.a, cableSegEnds.b) === 'wall'
+              ? 'в стене'
+              : segmentEmbed(floor, cableSegEnds.a, cableSegEnds.b) === 'slab'
+                ? 'в полу'
+                : 'стена ↔ пол'}
+          </p>
+        </section>
+      )}
+
+      {(isPlumbing || isElectrical) && elecNode && (
+        <section className="prop-section">
+          <h3>Узел электрики</h3>
+          {elecNode.anchor.type === 'wall' ? (
+            <>
+              <p className="muted">
+                В стене · смещение {elecNode.anchor.offset.toFixed(2)} м
+              </p>
+              <label>
+                Высота, м
+                <input
+                  type="number"
+                  min={0}
+                  max={5}
+                  step={0.05}
+                  value={elecNode.elevation ?? 0}
+                  onChange={(e) =>
+                    updateElectricalNode(elecNode.id, {
+                      elevation: Number(e.target.value),
+                    })
+                  }
+                />
+              </label>
+            </>
+          ) : (
+            <p className="muted">
+              В плите · X {elecNode.anchor.x.toFixed(2)} · Y{' '}
+              {elecNode.anchor.y.toFixed(2)}
+            </p>
+          )}
+          <label>
+            Прибор
+            <select
+              value={elecNode.device ?? ''}
+              onChange={(e) =>
+                updateElectricalNode(elecNode.id, {
+                  device: (e.target.value || undefined) as
+                    | 'outlet'
+                    | 'switch'
+                    | 'panel'
+                    | undefined,
+                })
+              }
+            >
+              <option value="">Нет</option>
+              <option value="outlet">{electricalDeviceLabel('outlet')}</option>
+              <option value="switch">{electricalDeviceLabel('switch')}</option>
+              <option value="panel">{electricalDeviceLabel('panel')}</option>
+            </select>
+          </label>
+          {elecNode.device && elecNode.anchor.type === 'wall' && (
+            <>
+              <label>
+                Сторона стены
+                <select
+                  value={elecNode.side ?? 'pos'}
+                  onChange={(e) =>
+                    updateElectricalNode(elecNode.id, {
+                      side: e.target.value as WallSide,
+                    })
+                  }
+                >
+                  {(['pos', 'neg'] as const).map((side) => {
+                    const wallId =
+                      elecNode.anchor.type === 'wall' ? elecNode.anchor.wallId : ''
+                    const room = roomsForWallSides(floor, wallId)[side]
+                    return (
+                      <option key={side} value={side}>
+                        {side === 'pos' ? 'Сторона +' : 'Сторона −'}
+                        {room ? ' (комната)' : ' (снаружи)'}
+                      </option>
+                    )
+                  })}
+                </select>
+              </label>
+              <label>
+                Ширина, мм
+                <input
+                  type="number"
+                  min={20}
+                  max={1500}
+                  step={1}
+                  value={Math.round(electricalDeviceSize(elecNode).width * 1000)}
+                  onChange={(e) =>
+                    updateElectricalNode(elecNode.id, {
+                      width: Number(e.target.value) / 1000,
+                    })
+                  }
+                />
+              </label>
+              <label>
+                Высота, мм
+                <input
+                  type="number"
+                  min={20}
+                  max={2000}
+                  step={1}
+                  value={Math.round(electricalDeviceSize(elecNode).height * 1000)}
+                  onChange={(e) =>
+                    updateElectricalNode(elecNode.id, {
+                      height: Number(e.target.value) / 1000,
+                    })
+                  }
+                />
+              </label>
+              <label>
+                Выступ, мм
+                <input
+                  type="number"
+                  min={4}
+                  max={300}
+                  step={1}
+                  value={Math.round(electricalDeviceSize(elecNode).depth * 1000)}
+                  onChange={(e) =>
+                    updateElectricalNode(elecNode.id, {
+                      depth: Number(e.target.value) / 1000,
+                    })
+                  }
+                />
+              </label>
+            </>
+          )}
+        </section>
+      )}
+
+      {(isPlumbing || isElectrical) &&
+        !pipeSeg &&
+        !pipeNode &&
+        !cableSeg &&
+        !elecNode && (
+          <p className="muted">
+            Клик по стене — трасса в стене, клик по полу — в плите.
+          </p>
+        )}
 
       {isDraft && (
       <section className="prop-section">

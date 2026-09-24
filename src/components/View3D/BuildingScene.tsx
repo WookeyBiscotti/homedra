@@ -31,6 +31,9 @@ import {
 } from '../../engine/geometry/wallCuts'
 import {
   isFloorRendered,
+  isMepDrawTool,
+  isMepFixtureTool,
+  isMepWorkbench,
   isStoryFloor,
   normalizeFloorVisibility,
   sunDirection,
@@ -48,6 +51,7 @@ import { PbrStandardMaterial } from './PbrStandardMaterial'
 import { VisitControls, type VisitActiveState } from './VisitControls'
 import { WallPickables } from './WallPickables'
 import { PlaceObjectFloorHit, PlacedObjects } from './PlacedObjects'
+import { MepNetworks } from './MepNetworks'
 
 /**
  * Procedural IBL via Lightformers (no CDN HDR).
@@ -279,7 +283,10 @@ function WallFaceMesh({
   const placing = useBuildingStore(
     (s) => s.tool === 'placeObject' && s.pendingModel != null,
   )
-  const blockHits = painting || placing
+  const routing = useBuildingStore(
+    (s) => isMepDrawTool(s.tool) || isMepFixtureTool(s.tool),
+  )
+  const blockHits = painting || placing || routing
 
   const onClick = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation()
@@ -348,7 +355,10 @@ function WallCutMesh({
   const placing = useBuildingStore(
     (s) => s.tool === 'placeObject' && s.pendingModel != null,
   )
-  const blockHits = painting || placing
+  const routing = useBuildingStore(
+    (s) => isMepDrawTool(s.tool) || isMepFixtureTool(s.tool),
+  )
+  const blockHits = painting || placing || routing
 
   const onClick = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation()
@@ -414,7 +424,10 @@ function FloorFinishes({
   const placing = useBuildingStore(
     (s) => s.tool === 'placeObject' && s.pendingModel != null,
   )
-  const blockHits = painting || placing
+  const routing = useBuildingStore(
+    (s) => isMepDrawTool(s.tool) || isMepFixtureTool(s.tool),
+  )
+  const blockHits = painting || placing || routing
 
   const wallFaces = useMemo(() => {
     if (!floor || !isStoryFloor(floor)) return []
@@ -923,12 +936,16 @@ function SceneContent({
   const transformDragging = useBuildingStore((s) => s.transformDragging)
   const pendingModel = useBuildingStore((s) => s.pendingModel)
   const tool = useBuildingStore((s) => s.tool)
+  const workbench = useBuildingStore((s) => s.workbench)
 
   const visit = sceneMode === 'visit'
   const exterior = sceneMode === 'exterior'
   const painting = sceneMode === 'paint'
   const placing =
     !visit && !painting && tool === 'placeObject' && pendingModel != null
+  const routing =
+    !visit && !painting && !placing && (isMepDrawTool(tool) || isMepFixtureTool(tool))
+  const mepGhost = isMepWorkbench(workbench) && !visit && !painting
   /** Paint uses interior-style opacity (only active floor solid). */
   const finishExterior = exterior
 
@@ -943,8 +960,12 @@ function SceneContent({
     for (const f of building.floors) {
       map.set(f.id, normalizeFloorVisibility(f.visible))
     }
+    if (mepGhost) {
+      const cur = map.get(activeFloorId)
+      if (cur === 'solid') map.set(activeFloorId, 'ghost')
+    }
     return map
-  }, [building.floors])
+  }, [building.floors, mepGhost, activeFloorId])
 
   const visibleFloorIds = useMemo(() => {
     const ids = new Set<string>()
@@ -1044,7 +1065,7 @@ function SceneContent({
           centerZ={planCenterZ}
           holes={groundHoles}
           shadowsEnabled={lighting.shadowsEnabled}
-          pickable={!painting && !placing}
+          pickable={!painting && !placing && !routing}
         />
       )}
 
@@ -1074,7 +1095,7 @@ function SceneContent({
               exterior={finishExterior}
               shadowsEnabled={lighting.shadowsEnabled}
               ghost={ghost}
-              pickable={!painting && !placing}
+              pickable={!painting && !placing && !routing}
             />
             <FloorFinishes
               floorId={f.floorId}
@@ -1098,10 +1119,23 @@ function SceneContent({
           activeFloorId={activeFloorId}
           shadowsEnabled={lighting.shadowsEnabled}
           visibilityByFloor={visibilityByFloor}
-          pickable={!painting && !placing}
+          pickable={!painting && !placing && !routing}
         />
-        {!visit && !painting && !placing && <WallPickables />}
-        {!visit && !painting && !placing && <OpeningPickables showSlabs />}
+        {!visit && !painting && !placing && !routing && <WallPickables />}
+        {!visit && !painting && !placing && !routing && (
+          <OpeningPickables showSlabs />
+        )}
+        {!visit &&
+          !painting &&
+          building.floors
+            .filter((f) => f.kind !== 'ground' && visibleFloorIds.has(f.id))
+            .map((f) => (
+              <MepNetworks
+                key={`mep-${f.id}`}
+                floor={f}
+                routing={routing && f.id === activeFloorId}
+              />
+            ))}
         {/* Placement plane last so it wins raycasts over floors/walls */}
         {placing &&
           activeFloor &&

@@ -32,17 +32,28 @@ import {
 } from '../engine/copyFloor'
 import {
   type Building,
+  type CableSegment,
   type Constraint,
+  CABLE_META,
   createEmptyBuilding,
   createEmptyFloor,
   createId,
   cycleFloorVisibility,
   DEFAULT_LIGHTING,
+  ELECTRICAL_DEVICE_SIZE,
+  type ElectricalDeviceKind,
+  type ElectricalNode,
   ensureBuildingOpenings,
+  ensureCableNetwork,
+  ensurePipeNetwork,
   estimatePlanHalf,
   type Floor,
   type FloorVisibility,
+  isElectricalTool,
   isGroundFloor,
+  isMepFixtureTool,
+  isMepWorkbench,
+  isPlumbingTool,
   isStoryFloor,
   type LightingSettings,
   type MaterialRef,
@@ -50,6 +61,11 @@ import {
   type ModelRef,
   type ObjectAppearance,
   type OpeningKind,
+  type PipeFixtureKind,
+  type PipeMedium,
+  type PipeNode,
+  type PipeSegment,
+  PIPE_MEDIUM_META,
   type PlacedObject,
   normalizeFloorVisibility,
   recalcFloorElevations,
@@ -86,6 +102,21 @@ import {
   setFloorPlateMaterial as applyFloorPlateMaterial,
   updateFloorPlateFields,
 } from '../engine/geometry/floorPlates'
+import {
+  connectMepNodes,
+  findMepNodeNear,
+  findMepSegmentNear,
+  findWallCenterlineNear,
+  makeCableSegment,
+  makeElectricalNode,
+  makePipeNode,
+  makePipeSegment,
+  placeElectricalDevice,
+  relocateMepNode,
+  removeMepNode,
+  removeMepSegment,
+  resolveMepEndpoint,
+} from '../engine/geometry/mep'
 import {
   applyProjectPackage,
   buildProjectPackage,
@@ -135,6 +166,12 @@ interface BuildingState {
   selection: Selection
   conflict: boolean
   wallDraftFrom: string | null
+  mepDraftFrom: string | null
+  pipeMedium: PipeMedium
+  pipeDiameterMm: number
+  pipeElevation: number
+  cableSectionMm2: number
+  cableElevation: number
   openingDraft: {
     wallId: string
     kind: OpeningKind
@@ -195,6 +232,47 @@ interface BuildingState {
   beginWall: (x: number, y: number) => void
   finishWall: (x: number, y: number) => void
   cancelWallDraft: () => void
+
+  setPipeMedium: (medium: PipeMedium) => void
+  setPipeDiameterMm: (mm: number) => void
+  setPipeElevation: (elevation: number) => void
+  setCableSectionMm2: (mm2: number) => void
+  setCableElevation: (elevation: number) => void
+  cancelMepDraft: () => void
+  /** Click to start/continue a pipe or cable, or place a fixture. */
+  clickMepAt: (x: number, y: number, elevation?: number) => void
+  beginMepNodeDrag: () => void
+  dragMepNode: (
+    network: 'pipes' | 'cables',
+    id: string,
+    x: number,
+    y: number,
+    elevation?: number,
+  ) => void
+  updatePipeSegment: (
+    id: string,
+    patch: Partial<Pick<PipeSegment, 'medium' | 'diameterMm'>>,
+  ) => void
+  updatePipeNode: (
+    id: string,
+    patch: Partial<
+      Pick<PipeNode, 'elevation' | 'fixture'> & { offset?: number; x?: number; y?: number }
+    >,
+  ) => void
+  updateCableSegment: (
+    id: string,
+    patch: Partial<Pick<CableSegment, 'sectionMm2'>>,
+  ) => void
+  updateElectricalNode: (
+    id: string,
+    patch: Partial<
+      Pick<ElectricalNode, 'elevation' | 'device' | 'side' | 'width' | 'height' | 'depth'> & {
+        offset?: number
+        x?: number
+        y?: number
+      }
+    >,
+  ) => void
 
   beginOpening: (x: number, y: number) => void
   updateOpeningDraft: (x: number, y: number) => void
@@ -399,6 +477,9 @@ interface BuildingState {
   newProject: () => void
 }
 
+/** Ignore a second 3D hit (wall + floor) from the same pointer event. */
+let lastMepClickMs = 0
+
 function replaceFloor(building: Building, floor: Floor): Building {
   return {
     ...building,
@@ -424,6 +505,12 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     selection: null,
     conflict: false,
     wallDraftFrom: null,
+    mepDraftFrom: null,
+    pipeMedium: 'coldWater',
+    pipeDiameterMm: PIPE_MEDIUM_META.coldWater.diameterMm,
+    pipeElevation: PIPE_MEDIUM_META.coldWater.elevation,
+    cableSectionMm2: CABLE_META.sectionMm2,
+    cableElevation: CABLE_META.elevation,
     openingDraft: null,
     slabOpeningDraft: null,
     floorPlateDraft: null,
@@ -464,6 +551,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         conflict: false,
         selection: null,
         wallDraftFrom: null,
+        mepDraftFrom: null,
         openingDraft: null,
         slabOpeningDraft: null,
         floorPlateDraft: null,
@@ -496,6 +584,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
           workbench: 'furnish',
           tool: 'select',
           wallDraftFrom: null,
+          mepDraftFrom: null,
           openingDraft: null,
           slabOpeningDraft: null,
           floorPlateDraft: null,
@@ -507,8 +596,19 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         })
         return
       }
+      if (isPlumbingTool(tool) && workbench !== 'plumbing') {
+        get().setWorkbench('plumbing')
+        get().setTool(tool)
+        return
+      }
+      if (isElectricalTool(tool) && workbench !== 'electrical') {
+        get().setWorkbench('electrical')
+        get().setTool(tool)
+        return
+      }
       const allowed = toolsForWorkbench(workbench)
       if (!allowed.includes(tool) && workbench !== 'draft') {
+        if (isMepWorkbench(workbench)) return
         // Draft tools from shortcut while in another workbench → switch to draft
         if (toolsForWorkbench('draft').includes(tool)) {
           get().setWorkbench('draft')
@@ -520,6 +620,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       set({
         tool,
         wallDraftFrom: null,
+        mepDraftFrom: null,
         openingDraft: null,
         slabOpeningDraft: null,
         floorPlateDraft: null,
@@ -530,6 +631,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       const prev = get().sceneMode
       const drafts = {
         wallDraftFrom: null as string | null,
+        mepDraftFrom: null as string | null,
         openingDraft: null,
         slabOpeningDraft: null,
         floorPlateDraft: null,
@@ -554,6 +656,17 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
           sceneMode: 'paint',
           tool: 'select',
           pendingModel: null,
+          modelBrowserOpen: false,
+          collectionBrowserOpen: false,
+          ...drafts,
+        })
+        return
+      }
+      if (workbench === 'plumbing' || workbench === 'electrical') {
+        set({
+          workbench,
+          sceneMode: prev === 'paint' ? 'interior' : prev,
+          tool: 'select',
           modelBrowserOpen: false,
           collectionBrowserOpen: false,
           ...drafts,
@@ -698,6 +811,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         activeFloorId: id,
         selection: null,
         wallDraftFrom: null,
+        mepDraftFrom: null,
         openingDraft: null,
         slabOpeningDraft: null,
         floorPlateDraft: null,
@@ -862,6 +976,462 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     },
 
     cancelWallDraft: () => set({ wallDraftFrom: null }),
+
+    setPipeMedium: (medium) => {
+      const meta = PIPE_MEDIUM_META[medium]
+      set({
+        pipeMedium: medium,
+        pipeDiameterMm: meta.diameterMm,
+        pipeElevation: meta.elevation,
+      })
+    },
+    setPipeDiameterMm: (mm) => {
+      const diameterMm = Math.max(6, Math.min(200, mm))
+      set({ pipeDiameterMm: diameterMm })
+      const sel = get().selection
+      if (sel?.kind !== 'pipeSegment' && sel?.kind !== 'pipeNode') return
+      const floor0 = get().activeFloor()
+      if (isGroundFloor(floor0)) return
+      const net0 = ensurePipeNetwork(floor0.pipes)
+      const ids =
+        sel.kind === 'pipeSegment'
+          ? new Set([sel.id])
+          : new Set(
+              net0.segments
+                .filter((s) => s.a === sel.id || s.b === sel.id)
+                .map((s) => s.id),
+            )
+      if (ids.size === 0) return
+      get().pushHistory()
+      get().updateActiveFloor((floor) => {
+        const net = ensurePipeNetwork(floor.pipes)
+        return {
+          ...floor,
+          pipes: {
+            ...net,
+            segments: net.segments.map((s) =>
+              ids.has(s.id) ? { ...s, diameterMm } : s,
+            ),
+          },
+        }
+      }, false)
+    },
+    setPipeElevation: (elevation) => {
+      set({ pipeElevation: Math.max(0, Math.min(5, elevation)) })
+    },
+    setCableSectionMm2: (mm2) => {
+      set({ cableSectionMm2: Math.max(0.75, Math.min(50, mm2)) })
+    },
+    setCableElevation: (elevation) => {
+      set({ cableElevation: Math.max(0, Math.min(5, elevation)) })
+    },
+    cancelMepDraft: () => set({ mepDraftFrom: null }),
+
+    clickMepAt: (x, y, elevation) => {
+      const now = performance.now()
+      if (now - lastMepClickMs < 50) return
+      lastMepClickMs = now
+      const floor0 = get().activeFloor()
+      if (isGroundFloor(floor0)) return
+      const tool = get().tool
+      const plumbing = get().workbench === 'plumbing' || isPlumbingTool(tool)
+      const elev =
+        elevation ??
+        (plumbing ? get().pipeElevation : get().cableElevation)
+
+      if (isMepFixtureTool(tool)) {
+        const electrical =
+          tool === 'outlet' || tool === 'switch' || tool === 'panel'
+        if (electrical) {
+          const existing = findMepNodeNear(
+            floor0,
+            ensureCableNetwork(floor0.cables).nodes,
+            x,
+            y,
+          )
+          const onWall =
+            findWallCenterlineNear(floor0, x, y) ||
+            (existing && existing.anchor.type === 'wall')
+          if (!onWall) {
+            set({ statusMessage: 'Укажите стену' })
+            return
+          }
+        }
+        get().pushHistory()
+        let floor = get().activeFloor()
+        if (plumbing) {
+          const net = ensurePipeNetwork(floor.pipes)
+          const fixture: PipeFixtureKind =
+            tool === 'pipeHeater' ? 'heater' : 'valve'
+          const resolved = resolveMepEndpoint(
+            floor,
+            net.nodes,
+            net.segments,
+            x,
+            y,
+            elev,
+            (anchor, el) => makePipeNode(anchor, el),
+            (a, b) =>
+              makePipeSegment(a, b, get().pipeMedium, get().pipeDiameterMm),
+          )
+          const nodes = resolved.nodes.map((n) =>
+            n.id === resolved.node.id ? { ...n, fixture } : n,
+          )
+          floor = { ...floor, pipes: { nodes, segments: resolved.segments } }
+          set({
+            building: replaceFloor(get().building, floor),
+            selection: { kind: 'pipeNode', id: resolved.node.id },
+            mepDraftFrom: null,
+            statusMessage: null,
+          })
+          return
+        }
+        const net = ensureCableNetwork(floor.cables)
+        const device: ElectricalDeviceKind =
+          tool === 'switch' ? 'switch' : tool === 'panel' ? 'panel' : 'outlet'
+        const placed = placeElectricalDevice(floor, net, x, y, elev, device)
+        if (!placed) {
+          set({ statusMessage: 'Укажите стену' })
+          return
+        }
+        floor = {
+          ...floor,
+          cables: { nodes: placed.nodes, segments: placed.segments },
+        }
+        set({
+          building: replaceFloor(get().building, floor),
+          selection: { kind: 'electricalNode', id: placed.node.id },
+          mepDraftFrom: null,
+          statusMessage: null,
+        })
+        return
+      }
+
+      if (tool !== 'pipe' && tool !== 'cable') return
+
+      const from = get().mepDraftFrom
+      if (!from) {
+        get().pushHistory()
+        let floor = get().activeFloor()
+        if (plumbing) {
+          const net = ensurePipeNetwork(floor.pipes)
+          const resolved = resolveMepEndpoint(
+            floor,
+            net.nodes,
+            net.segments,
+            x,
+            y,
+            elev,
+            (anchor, el) => makePipeNode(anchor, el),
+            (a, b) =>
+              makePipeSegment(a, b, get().pipeMedium, get().pipeDiameterMm),
+          )
+          floor = {
+            ...floor,
+            pipes: { nodes: resolved.nodes, segments: resolved.segments },
+          }
+          set({
+            building: replaceFloor(get().building, floor),
+            mepDraftFrom: resolved.node.id,
+            selection: { kind: 'pipeNode', id: resolved.node.id },
+            statusMessage: null,
+          })
+          return
+        }
+        const net = ensureCableNetwork(floor.cables)
+        const resolved = resolveMepEndpoint(
+          floor,
+          net.nodes,
+          net.segments,
+          x,
+          y,
+          elev,
+          (anchor, el) => makeElectricalNode(anchor, el),
+          (a, b) => makeCableSegment(a, b, get().cableSectionMm2),
+        )
+        floor = {
+          ...floor,
+          cables: { nodes: resolved.nodes, segments: resolved.segments },
+        }
+        set({
+          building: replaceFloor(get().building, floor),
+          mepDraftFrom: resolved.node.id,
+          selection: { kind: 'electricalNode', id: resolved.node.id },
+          statusMessage: null,
+        })
+        return
+      }
+
+      get().pushHistory()
+      let floor = get().activeFloor()
+      if (plumbing) {
+        const net = ensurePipeNetwork(floor.pipes)
+        if (!net.nodes.some((n) => n.id === from)) {
+          set({ mepDraftFrom: null, statusMessage: 'Начальная точка потеряна' })
+          return
+        }
+        const resolved = resolveMepEndpoint(
+          floor,
+          net.nodes,
+          net.segments,
+          x,
+          y,
+          elev,
+          (anchor, el) => makePipeNode(anchor, el),
+          (a, b) =>
+            makePipeSegment(a, b, get().pipeMedium, get().pipeDiameterMm),
+        )
+        const linked = connectMepNodes(
+          floor,
+          resolved.nodes,
+          resolved.segments,
+          from,
+          resolved.node.id,
+          (anchor, el) => makePipeNode(anchor, el),
+          (a, b) =>
+            makePipeSegment(a, b, get().pipeMedium, get().pipeDiameterMm),
+        )
+        if (!linked) {
+          set({
+            mepDraftFrom: resolved.node.id,
+            selection: { kind: 'pipeNode', id: resolved.node.id },
+            statusMessage: null,
+          })
+          return
+        }
+        floor = { ...floor, pipes: linked }
+        const lastSeg = linked.segments[linked.segments.length - 1]
+        set({
+          building: replaceFloor(get().building, floor),
+          mepDraftFrom: resolved.node.id,
+          selection: lastSeg
+            ? { kind: 'pipeSegment', id: lastSeg.id }
+            : { kind: 'pipeNode', id: resolved.node.id },
+          statusMessage: null,
+        })
+        return
+      }
+
+      const net = ensureCableNetwork(floor.cables)
+      if (!net.nodes.some((n) => n.id === from)) {
+        set({ mepDraftFrom: null, statusMessage: 'Начальная точка потеряна' })
+        return
+      }
+      const resolved = resolveMepEndpoint(
+        floor,
+        net.nodes,
+        net.segments,
+        x,
+        y,
+        elev,
+        (anchor, el) => makeElectricalNode(anchor, el),
+        (a, b) => makeCableSegment(a, b, get().cableSectionMm2),
+      )
+      const linked = connectMepNodes(
+        floor,
+        resolved.nodes,
+        resolved.segments,
+        from,
+        resolved.node.id,
+        (anchor, el) => makeElectricalNode(anchor, el),
+        (a, b) => makeCableSegment(a, b, get().cableSectionMm2),
+      )
+      if (!linked) {
+        set({
+          mepDraftFrom: resolved.node.id,
+          selection: { kind: 'electricalNode', id: resolved.node.id },
+          statusMessage: null,
+        })
+        return
+      }
+      floor = { ...floor, cables: linked }
+      const lastSeg = linked.segments[linked.segments.length - 1]
+      set({
+        building: replaceFloor(get().building, floor),
+        mepDraftFrom: resolved.node.id,
+        selection: lastSeg
+          ? { kind: 'cableSegment', id: lastSeg.id }
+          : { kind: 'electricalNode', id: resolved.node.id },
+        statusMessage: null,
+      })
+    },
+
+    beginMepNodeDrag: () => {
+      get().pushHistory()
+    },
+
+    dragMepNode: (network, id, x, y, elevation) => {
+      const floor0 = get().activeFloor()
+      if (isGroundFloor(floor0)) return
+      get().updateActiveFloor((floor) => {
+        if (network === 'pipes') {
+          const net = ensurePipeNetwork(floor.pipes)
+          return {
+            ...floor,
+            pipes: {
+              ...net,
+              nodes: net.nodes.map((n) =>
+                n.id === id ? relocateMepNode(floor, n, x, y, elevation) : n,
+              ),
+            },
+          }
+        }
+        const net = ensureCableNetwork(floor.cables)
+        return {
+          ...floor,
+          cables: {
+            ...net,
+            nodes: net.nodes.map((n) =>
+              n.id === id ? relocateMepNode(floor, n, x, y, elevation) : n,
+            ),
+          },
+        }
+      }, false)
+    },
+
+    updatePipeSegment: (id, patch) => {
+      get().pushHistory()
+      get().updateActiveFloor((floor) => {
+        const net = ensurePipeNetwork(floor.pipes)
+        return {
+          ...floor,
+          pipes: {
+            ...net,
+            segments: net.segments.map((s) =>
+              s.id === id
+                ? {
+                    ...s,
+                    ...patch,
+                    diameterMm: Math.max(
+                      6,
+                      Math.min(200, patch.diameterMm ?? s.diameterMm),
+                    ),
+                  }
+                : s,
+            ),
+          },
+        }
+      })
+    },
+    updatePipeNode: (id, patch) => {
+      get().pushHistory()
+      get().updateActiveFloor((floor) => {
+        const net = ensurePipeNetwork(floor.pipes)
+        return {
+          ...floor,
+          pipes: {
+            ...net,
+            nodes: net.nodes.map((n) => {
+              if (n.id !== id) return n
+              let anchor = n.anchor
+              if (anchor.type === 'wall' && patch.offset != null) {
+                anchor = { ...anchor, offset: Math.max(0, patch.offset) }
+              }
+              if (anchor.type === 'slab') {
+                anchor = {
+                  ...anchor,
+                  x: patch.x ?? anchor.x,
+                  y: patch.y ?? anchor.y,
+                }
+              }
+              const elevation =
+                anchor.type === 'wall'
+                  ? Math.max(0, Math.min(5, patch.elevation ?? n.elevation ?? 0))
+                  : undefined
+              return {
+                ...n,
+                anchor,
+                fixture: 'fixture' in patch ? patch.fixture : n.fixture,
+                elevation,
+              }
+            }),
+          },
+        }
+      })
+    },
+    updateCableSegment: (id, patch) => {
+      get().pushHistory()
+      get().updateActiveFloor((floor) => {
+        const net = ensureCableNetwork(floor.cables)
+        return {
+          ...floor,
+          cables: {
+            ...net,
+            segments: net.segments.map((s) =>
+              s.id === id
+                ? {
+                    ...s,
+                    sectionMm2: Math.max(
+                      0.75,
+                      Math.min(50, patch.sectionMm2 ?? s.sectionMm2),
+                    ),
+                  }
+                : s,
+            ),
+          },
+        }
+      })
+    },
+    updateElectricalNode: (id, patch) => {
+      get().pushHistory()
+      get().updateActiveFloor((floor) => {
+        const net = ensureCableNetwork(floor.cables)
+        return {
+          ...floor,
+          cables: {
+            ...net,
+            nodes: net.nodes.map((n) => {
+              if (n.id !== id) return n
+              let anchor = n.anchor
+              if (anchor.type === 'wall' && patch.offset != null) {
+                anchor = { ...anchor, offset: Math.max(0, patch.offset) }
+              }
+              if (anchor.type === 'slab') {
+                anchor = {
+                  ...anchor,
+                  x: patch.x ?? anchor.x,
+                  y: patch.y ?? anchor.y,
+                }
+              }
+              const elevation =
+                anchor.type === 'wall'
+                  ? Math.max(0, Math.min(5, patch.elevation ?? n.elevation ?? 0))
+                  : undefined
+              const device = 'device' in patch ? patch.device : n.device
+              if (!device) {
+                return { ...n, anchor, device: undefined, elevation }
+              }
+              const kindChanged = 'device' in patch && patch.device !== n.device
+              const sized = ELECTRICAL_DEVICE_SIZE[device]
+              const clampM = (v: number, min: number, max: number) =>
+                Math.max(min, Math.min(max, v))
+              return {
+                ...n,
+                anchor,
+                device,
+                elevation,
+                side: patch.side ?? n.side ?? 'pos',
+                width: clampM(
+                  patch.width ?? (kindChanged ? sized.width : (n.width ?? sized.width)),
+                  0.02,
+                  1.5,
+                ),
+                height: clampM(
+                  patch.height ?? (kindChanged ? sized.height : (n.height ?? sized.height)),
+                  0.02,
+                  2,
+                ),
+                depth: clampM(
+                  patch.depth ?? (kindChanged ? sized.depth : (n.depth ?? sized.depth)),
+                  0.004,
+                  0.3,
+                ),
+              }
+            }),
+          },
+        }
+      })
+    },
 
     beginOpening: (x, y) => {
       if (isGroundFloor(get().activeFloor())) return
@@ -1289,6 +1859,32 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
 
     selectAt: (x, y) => {
       const floor = get().activeFloor()
+      if (isMepWorkbench(get().workbench)) {
+        const plumbing = get().workbench === 'plumbing'
+        const net = plumbing
+          ? ensurePipeNetwork(floor.pipes)
+          : ensureCableNetwork(floor.cables)
+        const node = findMepNodeNear(floor, net.nodes, x, y)
+        if (node) {
+          set({
+            selection: plumbing
+              ? { kind: 'pipeNode', id: node.id }
+              : { kind: 'electricalNode', id: node.id },
+          })
+          return
+        }
+        const hit = findMepSegmentNear(floor, net.nodes, net.segments, x, y)
+        if (hit) {
+          set({
+            selection: plumbing
+              ? { kind: 'pipeSegment', id: hit.segment.id }
+              : { kind: 'cableSegment', id: hit.segment.id },
+          })
+          return
+        }
+        set({ selection: null })
+        return
+      }
       const vertex = floor.vertices.find((v) => Math.hypot(v.x - x, v.y - y) <= 0.2)
       if (vertex) {
         set({ selection: { kind: 'vertex', id: vertex.id } })
@@ -2055,6 +2651,26 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
           ...floor,
           objects: (floor.objects ?? []).filter((o) => o.id !== selection.id),
         }
+      } else if (selection.kind === 'pipeSegment') {
+        const net = ensurePipeNetwork(floor.pipes)
+        floor = {
+          ...floor,
+          pipes: { ...net, segments: removeMepSegment(net.segments, selection.id) },
+        }
+      } else if (selection.kind === 'pipeNode') {
+        const net = ensurePipeNetwork(floor.pipes)
+        const next = removeMepNode(net.nodes, net.segments, selection.id)
+        floor = { ...floor, pipes: next }
+      } else if (selection.kind === 'cableSegment') {
+        const net = ensureCableNetwork(floor.cables)
+        floor = {
+          ...floor,
+          cables: { ...net, segments: removeMepSegment(net.segments, selection.id) },
+        }
+      } else if (selection.kind === 'electricalNode') {
+        const net = ensureCableNetwork(floor.cables)
+        const next = removeMepNode(net.nodes, net.segments, selection.id)
+        floor = { ...floor, cables: next }
       } else if (selection.kind === 'wall') {
         floor = removeWall(floor, selection.id)
       } else if (selection.kind === 'vertex') {

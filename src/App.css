@@ -320,6 +320,52 @@ body.panel-resizing * {
   min-height: 0;
 }
 
+.mep-medium-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.6rem;
+}
+
+.mep-medium-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  padding: 0.28rem 0.45rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.mep-medium-btn.active {
+  border-color: var(--mep-color, var(--accent));
+  background: color-mix(in srgb, var(--mep-color, var(--accent)) 16%, var(--panel));
+}
+
+.mep-swatch {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  background: var(--mep-color, #888);
+  flex: 0 0 auto;
+}
+
+.mep-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.mep-field input {
+  width: 100%;
+}
+
 .properties {
   border-right: none;
   border-left: 1px solid var(--line);
@@ -2222,7 +2268,9 @@ button.ghost.small {
 @media (max-width: 900px) {
   .workspace,
   .workspace-paint,
-  .workspace-furnish {
+  .workspace-furnish,
+  .workspace-plumbing,
+  .workspace-electrical {
     grid-template-columns: 1fr;
     grid-template-rows: auto 1fr auto;
   }

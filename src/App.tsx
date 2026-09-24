@@ -164,6 +164,7 @@ export default function App() {
   const cancelOpeningDraft = useBuildingStore((s) => s.cancelOpeningDraft)
   const cancelSlabOpeningDraft = useBuildingStore((s) => s.cancelSlabOpeningDraft)
   const cancelFloorPlateDraft = useBuildingStore((s) => s.cancelFloorPlateDraft)
+  const cancelMepDraft = useBuildingStore((s) => s.cancelMepDraft)
   const viewMode = useBuildingStore((s) => s.viewMode)
   const setTransformGizmoMode = useBuildingStore((s) => s.setTransformGizmoMode)
   const selection = useBuildingStore((s) => s.selection)
@@ -195,6 +196,7 @@ export default function App() {
         cancelOpeningDraft()
         cancelSlabOpeningDraft()
         cancelFloorPlateDraft()
+        cancelMepDraft()
         useBuildingStore.getState().setPendingModel(null)
         setTool('select')
         return
@@ -215,6 +217,35 @@ export default function App() {
         setTransformGizmoMode(
           key === 'g' ? 'translate' : key === 'r' ? 'rotate' : 'scale',
         )
+        return
+      }
+      if (!mod && workbench === 'plumbing') {
+        const plumbingKeys: Record<string, Tool> = {
+          v: 'select',
+          t: 'pipe',
+          k: 'pipeValve',
+          g: 'pipeHeater',
+        }
+        const t = plumbingKeys[key]
+        if (t) {
+          e.preventDefault()
+          setTool(t)
+        }
+        return
+      }
+      if (!mod && workbench === 'electrical') {
+        const electricalKeys: Record<string, Tool> = {
+          v: 'select',
+          c: 'cable',
+          r: 'outlet',
+          p: 'switch',
+          s: 'panel',
+        }
+        const t = electricalKeys[key]
+        if (t) {
+          e.preventDefault()
+          setTool(t)
+        }
         return
       }
       if (!mod) {
@@ -244,6 +275,7 @@ export default function App() {
     cancelOpeningDraft,
     cancelSlabOpeningDraft,
     cancelFloorPlateDraft,
+    cancelMepDraft,
     setTransformGizmoMode,
     selection,
   ])

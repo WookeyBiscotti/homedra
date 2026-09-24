@@ -56,6 +56,8 @@ describe('applyFloorCopy', () => {
       ...DEFAULT_COPY_FLOOR_OPTIONS,
       stairs: false,
       plates: false,
+      pipes: false,
+      cables: false,
     })
 
     expect(result.id).toBe(target.id)
@@ -95,6 +97,8 @@ describe('applyFloorCopy', () => {
       passages: false,
       stairs: false,
       plates: false,
+      pipes: false,
+      cables: false,
     })
 
     expect(result.constraints).toHaveLength(0)
@@ -113,6 +117,8 @@ describe('applyFloorCopy', () => {
       passages: false,
       stairs: false,
       plates: false,
+      pipes: false,
+      cables: false,
     })
 
     expect(result.walls).toHaveLength(2)

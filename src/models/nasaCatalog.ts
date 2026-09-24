@@ -1,3 +1,4 @@
+import { publicUrl } from '../publicUrl'
 import type { ModelHit, SearchOpts, SearchResult } from './types'
 import { paginateHits } from './catalog'
 import { proxiedAssetUrl } from './proxyUrl'
@@ -23,7 +24,7 @@ type NasaCatalogFile = {
   }>
 }
 
-const CATALOG_URL = '/nasa-catalog.json'
+const CATALOG_URL = publicUrl('nasa-catalog.json')
 const GITHUB_RAW =
   'https://raw.githubusercontent.com/nasa/NASA-3D-Resources/master/'
 
@@ -51,7 +52,7 @@ function loadNasaCatalog(): Promise<{ assets: NasaAsset[]; note?: string }> {
             path: a.path,
             license: a.license,
             glbUrl: proxiedAssetUrl(remote),
-            thumbnailUrl: `/models/nasa-thumbs/${a.id}.svg`,
+            thumbnailUrl: publicUrl(`models/nasa-thumbs/${a.id}.svg`),
           }
         })
         return { assets, note: data.licenseNote }

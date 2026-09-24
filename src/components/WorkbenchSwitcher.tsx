@@ -18,6 +18,16 @@ const WORKBENCHES: { id: Workbench; label: string; hint: string }[] = [
     label: 'Объекты',
     hint: 'Каталог и расстановка 3D моделей',
   },
+  {
+    id: 'plumbing',
+    label: 'Трубы',
+    hint: 'Вода, канализация и газ в стенах и плите',
+  },
+  {
+    id: 'electrical',
+    label: 'Электрика',
+    hint: 'Кабели, розетки, выключатели, щитки',
+  },
 ]
 
 export function WorkbenchSwitcher() {

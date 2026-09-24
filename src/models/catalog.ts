@@ -1,3 +1,4 @@
+import { publicUrl } from '../publicUrl'
 import type { ModelHit, SearchOpts, SearchResult } from './types'
 
 export interface CatalogAsset {
@@ -17,7 +18,7 @@ type CatalogFile = {
   assets: CatalogAsset[]
 }
 
-const CATALOG_URL = '/model-catalog.json'
+const CATALOG_URL = publicUrl('model-catalog.json')
 
 let catalogPromise: Promise<CatalogAsset[]> | null = null
 
@@ -80,10 +81,10 @@ export async function searchCatalog(
     library: 'catalog',
     id: a.id,
     title: a.title,
-    thumbUrl: a.thumbnailUrl || `/models/fixtures/${a.id}.svg`,
+    thumbUrl: publicUrl(a.thumbnailUrl || `/models/fixtures/${a.id}.svg`),
     license: a.license,
     author: a.author,
-    glbUrl: a.glbUrl,
+    glbUrl: publicUrl(a.glbUrl),
   }))
   return paginateHits(all, opts)
 }

@@ -37,6 +37,8 @@ import { planHalfSizeOf } from '../../engine/geometry/objectSnap'
 import {
   isFloorPlateSelected,
   isFloorPlateTool,
+  isMepDrawTool,
+  isMepFixtureTool,
   isObjectSelected,
   isOpeningSelected,
   isSlabOpeningSelected,
@@ -52,6 +54,7 @@ import {
 } from '../../engine/types'
 import { useBuildingStore } from '../../store/buildingStore'
 import { ConstraintPictograms } from './ConstraintPictograms'
+import { MepPlanLayer } from './MepPlanLayer'
 
 const DEFAULT_SCALE = 40 // px per meter
 const MIN_SCALE = 8
@@ -219,6 +222,7 @@ export function FloorPlanCanvas() {
   const finishFloorPlate = useBuildingStore((s) => s.finishFloorPlate)
   const dragFloorPlate = useBuildingStore((s) => s.dragFloorPlate)
   const placeObjectAt = useBuildingStore((s) => s.placeObjectAt)
+  const clickMepAt = useBuildingStore((s) => s.clickMepAt)
   const dragPlacedObject = useBuildingStore((s) => s.dragPlacedObject)
   const selectAt = useBuildingStore((s) => s.selectAt)
   const selectInRect = useBuildingStore((s) => s.selectInRect)
@@ -647,6 +651,10 @@ export function FloorPlanCanvas() {
     if (tool === 'wall') {
       if (!wallDraftFrom) beginWall(w.x, w.y)
       else finishWall(w.x, w.y)
+      return
+    }
+    if (isMepDrawTool(tool) || isMepFixtureTool(tool)) {
+      clickMepAt(w.x, w.y)
       return
     }
     if (
@@ -1511,6 +1519,12 @@ export function FloorPlanCanvas() {
             )
           })}
 
+          <MepPlanLayer
+            floor={floor}
+            toScreen={toScreen}
+            toWorld={toWorld}
+            pointer={pointer}
+          />
           {workbench === 'draft' && (
             <ConstraintPictograms floor={floor} toScreen={toScreen} />
           )}

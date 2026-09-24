@@ -1,4 +1,5 @@
 import type { MaterialRef } from '../engine/types'
+import { publicUrl } from '../publicUrl'
 import * as THREE from 'three'
 
 /**
@@ -6,7 +7,7 @@ import * as THREE from 'three'
  * call it directly. We ship a same-origin catalog and load maps from their
  * Backblaze CDN (which does allow CORS).
  */
-const CATALOG_URL = '/ambientcg-catalog.json'
+const CATALOG_URL = publicUrl('ambientcg-catalog.json')
 const THUMB_BASE =
   'https://f003.backblazeb2.com/file/ambientCG-Web/media/thumbnail'
 const PREVIEW_BASE =

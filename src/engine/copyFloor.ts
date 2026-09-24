@@ -1,5 +1,11 @@
 import {
+  copyCableNetwork,
+  copyPipeNetwork,
+} from './geometry/mep'
+import {
   createId,
+  emptyCableNetwork,
+  emptyPipeNetwork,
   type Constraint,
   type Floor,
   type FloorPlate,
@@ -18,6 +24,8 @@ export interface CopyFloorOptions {
   passages: boolean
   stairs: boolean
   plates: boolean
+  pipes: boolean
+  cables: boolean
 }
 
 export const DEFAULT_COPY_FLOOR_OPTIONS: CopyFloorOptions = {
@@ -28,6 +36,8 @@ export const DEFAULT_COPY_FLOOR_OPTIONS: CopyFloorOptions = {
   passages: true,
   stairs: true,
   plates: true,
+  pipes: true,
+  cables: true,
 }
 
 function openingKindSelected(
@@ -149,6 +159,10 @@ export function applyFloorCopy(
       ...target,
       slabOpenings: options.stairs ? slabOpenings : (target.slabOpenings ?? []),
       plates: options.plates ? plates : (target.plates ?? []),
+      pipes: options.pipes ? copyPipeNetwork(source, null) : (target.pipes ?? emptyPipeNetwork()),
+      cables: options.cables
+        ? copyCableNetwork(source, null)
+        : (target.cables ?? emptyCableNetwork()),
     }
   }
 
@@ -196,5 +210,11 @@ export function applyFloorCopy(
     openings,
     slabOpenings: options.stairs ? slabOpenings : [],
     plates: options.plates ? plates : [],
+    pipes: options.pipes
+      ? copyPipeNetwork(source, wallMap)
+      : (target.pipes ?? emptyPipeNetwork()),
+    cables: options.cables
+      ? copyCableNetwork(source, wallMap)
+      : (target.cables ?? emptyCableNetwork()),
   }
 }

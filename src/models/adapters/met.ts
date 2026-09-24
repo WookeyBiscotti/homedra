@@ -1,3 +1,4 @@
+import { publicUrl } from '../../publicUrl'
 import { paginateHits } from '../catalog'
 import type { LibraryAdapter, ModelHit, SearchResult } from '../types'
 
@@ -18,7 +19,7 @@ let catalogPromise: Promise<MetAsset[]> | null = null
 
 function loadMet(): Promise<MetAsset[]> {
   if (!catalogPromise) {
-    catalogPromise = fetch('/met-catalog.json')
+    catalogPromise = fetch(publicUrl('met-catalog.json'))
       .then(async (res) => {
         if (!res.ok) throw new Error(`Met catalog (${res.status})`)
         const data = (await res.json()) as MetFile
