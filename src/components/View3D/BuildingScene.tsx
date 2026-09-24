@@ -18,6 +18,7 @@ import { useEffect, useMemo, useRef, useState, Suspense } from 'react'
 import type { ThreeEvent } from '@react-three/fiber'
 import { buildingBounds, buildingFootprintHoles, extrudeBuilding } from '../../engine/extrude'
 import { floorPaintRegions } from '../../engine/geometry/floorPaint'
+import { resolveFloorRegionMaterial } from '../../engine/geometry/floorPlates'
 import { floorSlabOpeningHoles } from '../../engine/geometry/slabOpenings'
 import {
   buildRoomFloorGeometry,
@@ -264,6 +265,10 @@ function WallFaceMesh({
   const setSelection = useBuildingStore((s) => s.setSelection)
   const setActiveFloor = useBuildingStore((s) => s.setActiveFloor)
   const painting = sceneMode === 'paint'
+  const placing = useBuildingStore(
+    (s) => s.tool === 'placeObject' && s.pendingModel != null,
+  )
+  const blockHits = painting || placing
 
   const onClick = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation()
@@ -274,11 +279,11 @@ function WallFaceMesh({
   return (
     <mesh
       geometry={geometry}
-      // In paint mode only PaintPickables receive hits (avoids "through wall" targets)
-      raycast={painting ? disableRaycast : undefined}
-      onClick={painting ? undefined : onClick}
+      // In paint/place mode only dedicated pickables receive hits
+      raycast={blockHits ? disableRaycast : undefined}
+      onClick={blockHits ? undefined : onClick}
       onPointerOver={
-        painting
+        blockHits
           ? undefined
           : (e) => {
               e.stopPropagation()
@@ -286,7 +291,7 @@ function WallFaceMesh({
             }
       }
       onPointerOut={
-        painting
+        blockHits
           ? undefined
           : () => {
               document.body.style.cursor = 'default'
@@ -329,6 +334,10 @@ function WallCutMesh({
   const setSelection = useBuildingStore((s) => s.setSelection)
   const setActiveFloor = useBuildingStore((s) => s.setActiveFloor)
   const painting = sceneMode === 'paint'
+  const placing = useBuildingStore(
+    (s) => s.tool === 'placeObject' && s.pendingModel != null,
+  )
+  const blockHits = painting || placing
 
   const onClick = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation()
@@ -339,10 +348,10 @@ function WallCutMesh({
   return (
     <mesh
       geometry={geometry}
-      raycast={painting ? disableRaycast : undefined}
-      onClick={painting ? undefined : onClick}
+      raycast={blockHits ? disableRaycast : undefined}
+      onClick={blockHits ? undefined : onClick}
       onPointerOver={
-        painting
+        blockHits
           ? undefined
           : (e) => {
               e.stopPropagation()
@@ -350,7 +359,7 @@ function WallCutMesh({
             }
       }
       onPointerOut={
-        painting
+        blockHits
           ? undefined
           : () => {
               document.body.style.cursor = 'default'
@@ -393,6 +402,10 @@ function FloorFinishes({
   const setActiveFloor = useBuildingStore((s) => s.setActiveFloor)
   const sceneMode = useBuildingStore((s) => s.sceneMode)
   const painting = sceneMode === 'paint'
+  const placing = useBuildingStore(
+    (s) => s.tool === 'placeObject' && s.pendingModel != null,
+  )
+  const blockHits = painting || placing
 
   const wallFaces = useMemo(() => {
     if (!floor || !isStoryFloor(floor)) return []
@@ -478,10 +491,10 @@ function FloorFinishes({
     const out: Array<{
       key: string
       geo: THREE.BufferGeometry
-      mat: NonNullable<NonNullable<typeof floor.roomFloorMaterials>[string]>
+      mat: NonNullable<ReturnType<typeof resolveFloorRegionMaterial>>
     }> = []
     for (const region of regions) {
-      const mat = floor.roomFloorMaterials?.[region.key]
+      const mat = resolveFloorRegionMaterial(floor, region.key)
       if (!mat) continue
       const geo = buildRoomFloorGeometry(region.polygon, floor.elevation, {
         holes,
@@ -539,9 +552,9 @@ function FloorFinishes({
         <mesh
           key={item.key}
           geometry={item.geo}
-          raycast={painting ? disableRaycast : undefined}
+          raycast={blockHits ? disableRaycast : undefined}
           onClick={
-            painting
+            blockHits
               ? undefined
               : (e: ThreeEvent<MouseEvent>) => {
                   e.stopPropagation()
@@ -550,7 +563,7 @@ function FloorFinishes({
                 }
           }
           onPointerOver={
-            painting
+            blockHits
               ? undefined
               : (e) => {
                   e.stopPropagation()
@@ -558,7 +571,7 @@ function FloorFinishes({
                 }
           }
           onPointerOut={
-            painting
+            blockHits
               ? undefined
               : () => {
                   document.body.style.cursor = 'default'
@@ -590,9 +603,9 @@ function FloorFinishes({
           key={key}
           geometry={geo}
           receiveShadow={shadowsEnabled}
-          raycast={painting ? disableRaycast : undefined}
+          raycast={blockHits ? disableRaycast : undefined}
           onClick={
-            painting
+            blockHits
               ? undefined
               : (e: ThreeEvent<MouseEvent>) => {
                   e.stopPropagation()
@@ -601,7 +614,7 @@ function FloorFinishes({
                 }
           }
           onPointerOver={
-            painting
+            blockHits
               ? undefined
               : (e) => {
                   e.stopPropagation()
@@ -609,7 +622,7 @@ function FloorFinishes({
                 }
           }
           onPointerOut={
-            painting
+            blockHits
               ? undefined
               : () => {
                   document.body.style.cursor = 'default'
@@ -899,10 +912,15 @@ function SceneContent({
   const activeFloorId = useBuildingStore((s) => s.activeFloorId)
   const sceneMode = useBuildingStore((s) => s.sceneMode)
   const lighting = useBuildingStore((s) => s.lighting)
+  const transformDragging = useBuildingStore((s) => s.transformDragging)
+  const pendingModel = useBuildingStore((s) => s.pendingModel)
+  const tool = useBuildingStore((s) => s.tool)
 
   const visit = sceneMode === 'visit'
   const exterior = sceneMode === 'exterior'
   const painting = sceneMode === 'paint'
+  const placing =
+    !visit && !painting && tool === 'placeObject' && pendingModel != null
   /** Paint uses interior-style opacity (only active floor solid). */
   const finishExterior = exterior
 
@@ -1008,7 +1026,7 @@ function SceneContent({
           centerZ={planCenterZ}
           holes={groundHoles}
           shadowsEnabled={lighting.shadowsEnabled}
-          pickable={!painting}
+          pickable={!painting && !placing}
         />
       )}
 
@@ -1036,7 +1054,7 @@ function SceneContent({
               activeFloorId={activeFloorId}
               exterior={finishExterior}
               shadowsEnabled={lighting.shadowsEnabled}
-              pickable={!painting}
+              pickable={!painting && !placing}
             />
             <FloorFinishes
               floorId={f.floorId}
@@ -1053,13 +1071,6 @@ function SceneContent({
                 shadowsEnabled={lighting.shadowsEnabled}
               />
             )}
-            {!visit &&
-              !painting &&
-              floorData &&
-              floorData.id === activeFloorId &&
-              floorData.kind !== 'ground' && (
-                <PlaceObjectFloorHit floor={floorData} />
-              )}
           </group>
           )
         })}
@@ -1068,10 +1079,16 @@ function SceneContent({
           activeFloorId={activeFloorId}
           shadowsEnabled={lighting.shadowsEnabled}
           exterior={finishExterior}
-          pickable={!painting}
+          pickable={!painting && !placing}
         />
-        {!visit && !painting && <WallPickables />}
-        {!visit && !painting && <OpeningPickables showSlabs />}
+        {!visit && !painting && !placing && <WallPickables />}
+        {!visit && !painting && !placing && <OpeningPickables showSlabs />}
+        {/* Placement plane last so it wins raycasts over floors/walls */}
+        {placing &&
+          activeFloor &&
+          activeFloor.kind !== 'ground' && (
+            <PlaceObjectFloorHit floor={activeFloor} />
+          )}
       </group>
 
       {visit ? (
@@ -1086,7 +1103,13 @@ function SceneContent({
           <OrbitControls
             target={center}
             makeDefault
+            enabled={!transformDragging}
             maxPolarAngle={Math.PI * 0.49}
+            mouseButtons={{
+              LEFT: -1 as unknown as THREE.MOUSE,
+              MIDDLE: THREE.MOUSE.PAN,
+              RIGHT: THREE.MOUSE.ROTATE,
+            }}
           />
         </>
       )}
@@ -1105,7 +1128,6 @@ export function BuildingScene() {
   const setSceneMode = useBuildingStore((s) => s.setSceneMode)
   const lightingMenuOpen = useBuildingStore((s) => s.lightingMenuOpen)
   const setLightingMenuOpen = useBuildingStore((s) => s.setLightingMenuOpen)
-  const setSelection = useBuildingStore((s) => s.setSelection)
   const [visitLocked, setVisitLocked] = useState(false)
   const painting = sceneMode === 'paint'
 
@@ -1158,7 +1180,10 @@ export function BuildingScene() {
         </div>
       )}
       <LightingPanel />
-      <div className="view3d-body">
+      <div
+        className="view3d-body"
+        onContextMenu={(e) => e.preventDefault()}
+      >
         <Canvas
           camera={{ position: [10, 8, 10], fov: 45 }}
           shadows
@@ -1169,7 +1194,13 @@ export function BuildingScene() {
           }}
           onPointerMissed={(e) => {
             if (e.button !== 0 || sceneMode === 'visit') return
-            setSelection(null)
+            // Gizmo meshes aren't in the R3F event system, so clicks on them
+            // look like "misses". Wait a tick for TransformControls mouseDown.
+            window.setTimeout(() => {
+              const s = useBuildingStore.getState()
+              if (s.transformDragging) return
+              s.setSelection(null)
+            }, 0)
           }}
         >
           <Suspense fallback={null}>

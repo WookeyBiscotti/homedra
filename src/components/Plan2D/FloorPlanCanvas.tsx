@@ -25,11 +25,18 @@ import {
   slabOpeningRect,
 } from '../../engine/geometry/slabOpenings'
 import {
+  createFloorPlateFromDrag,
+  floorPlateRect,
+} from '../../engine/geometry/floorPlates'
+import {
   allJoinedWallFootprints,
   wallFootprint,
   joinedWallFootprint,
 } from '../../engine/geometry/wallSolid'
+import { planHalfSizeOf } from '../../engine/geometry/objectSnap'
 import {
+  isFloorPlateSelected,
+  isFloorPlateTool,
   isObjectSelected,
   isOpeningSelected,
   isSlabOpeningSelected,
@@ -67,9 +74,19 @@ function contentCenter(
   lower: Floor | null,
 ): { cx: number; cy: number } {
   const verts = [...floor.vertices, ...(lower?.vertices ?? [])]
-  if (!verts.length) return { cx: 3, cy: 2 }
-  const xs = verts.map((v) => v.x)
-  const ys = verts.map((v) => v.y)
+  const platePts: Array<{ x: number; y: number }> = []
+  for (const p of [...(floor.plates ?? []), ...(lower?.plates ?? [])]) {
+    const hw = p.width / 2
+    const hd = p.depth / 2
+    platePts.push(
+      { x: p.x - hw, y: p.y - hd },
+      { x: p.x + hw, y: p.y + hd },
+    )
+  }
+  const all = [...verts, ...platePts]
+  if (!all.length) return { cx: 3, cy: 2 }
+  const xs = all.map((v) => v.x)
+  const ys = all.map((v) => v.y)
   return {
     cx: (Math.min(...xs) + Math.max(...xs)) / 2,
     cy: (Math.min(...ys) + Math.max(...ys)) / 2,
@@ -179,11 +196,13 @@ export function FloorPlanCanvas() {
   const building = useBuildingStore((s) => s.building)
   const activeFloorId = useBuildingStore((s) => s.activeFloorId)
   const floor = useBuildingStore((s) => s.activeFloor())
+  const workbench = useBuildingStore((s) => s.workbench)
   const tool = useBuildingStore((s) => s.tool)
   const selection = useBuildingStore((s) => s.selection)
   const wallDraftFrom = useBuildingStore((s) => s.wallDraftFrom)
   const openingDraft = useBuildingStore((s) => s.openingDraft)
   const slabOpeningDraft = useBuildingStore((s) => s.slabOpeningDraft)
+  const floorPlateDraft = useBuildingStore((s) => s.floorPlateDraft)
   const conflict = useBuildingStore((s) => s.conflict)
   const beginWall = useBuildingStore((s) => s.beginWall)
   const finishWall = useBuildingStore((s) => s.finishWall)
@@ -195,6 +214,10 @@ export function FloorPlanCanvas() {
   const updateSlabOpeningDraft = useBuildingStore((s) => s.updateSlabOpeningDraft)
   const finishSlabOpening = useBuildingStore((s) => s.finishSlabOpening)
   const dragSlabOpening = useBuildingStore((s) => s.dragSlabOpening)
+  const beginFloorPlate = useBuildingStore((s) => s.beginFloorPlate)
+  const updateFloorPlateDraft = useBuildingStore((s) => s.updateFloorPlateDraft)
+  const finishFloorPlate = useBuildingStore((s) => s.finishFloorPlate)
+  const dragFloorPlate = useBuildingStore((s) => s.dragFloorPlate)
   const placeObjectAt = useBuildingStore((s) => s.placeObjectAt)
   const dragPlacedObject = useBuildingStore((s) => s.dragPlacedObject)
   const selectAt = useBuildingStore((s) => s.selectAt)
@@ -211,6 +234,7 @@ export function FloorPlanCanvas() {
   const setFixedLengthValue = useBuildingStore((s) => s.setFixedLengthValue)
   const openingDragActive = useRef(false)
   const slabDragActive = useRef(false)
+  const plateDragActive = useRef(false)
   const openingMove = useRef<{
     id: string
     start: { x: number; y: number }
@@ -224,6 +248,13 @@ export function FloorPlanCanvas() {
     moved: boolean
   } | null>(null)
   const slabMoveMoved = useRef(false)
+  const plateMove = useRef<{
+    id: string
+    start: { x: number; y: number }
+    origin: { x: number; y: number }
+    moved: boolean
+  } | null>(null)
+  const plateMoveMoved = useRef(false)
   const objectMove = useRef<{
     id: string
     start: { x: number; y: number }
@@ -402,6 +433,15 @@ export function FloorPlanCanvas() {
       beginSlabOpening(w.x, w.y)
       return
     }
+    if (isFloorPlateTool(tool) && evt.button === 0) {
+      const stage = e.target.getStage()
+      const pos = stage?.getPointerPosition()
+      if (!pos) return
+      const w = toWorld(pos.x, pos.y)
+      plateDragActive.current = true
+      beginFloorPlate(w.x, w.y)
+      return
+    }
     if (tool !== 'select') return
     if (e.target !== e.target.getStage()) return
     if (lengthEdit) {
@@ -440,6 +480,11 @@ export function FloorPlanCanvas() {
       return
     }
 
+    if (plateDragActive.current && floorPlateDraft) {
+      updateFloorPlateDraft(w.x, w.y)
+      return
+    }
+
     if (openingMove.current) {
       const drag = openingMove.current
       const dx = w.x - drag.start.x
@@ -463,6 +508,19 @@ export function FloorPlanCanvas() {
         pushHistory()
       }
       dragSlabOpening(drag.id, drag.origin.x + dx, drag.origin.y + dy)
+      return
+    }
+
+    if (plateMove.current) {
+      const drag = plateMove.current
+      const dx = w.x - drag.start.x
+      const dy = w.y - drag.start.y
+      if (!drag.moved && Math.hypot(dx, dy) < 0.02) return
+      if (!drag.moved) {
+        drag.moved = true
+        pushHistory()
+      }
+      dragFloorPlate(drag.id, drag.origin.x + dx, drag.origin.y + dy)
       return
     }
 
@@ -520,6 +578,11 @@ export function FloorPlanCanvas() {
       if (slabOpeningDraft) finishSlabOpening()
       return
     }
+    if (plateDragActive.current) {
+      plateDragActive.current = false
+      if (floorPlateDraft) finishFloorPlate()
+      return
+    }
     if (openingMove.current) {
       openingMoveMoved.current = openingMove.current.moved
       openingMove.current = null
@@ -530,6 +593,13 @@ export function FloorPlanCanvas() {
     if (slabMove.current) {
       slabMoveMoved.current = slabMove.current.moved
       slabMove.current = null
+      marqueeActive.current = false
+      setMarquee(null)
+      return
+    }
+    if (plateMove.current) {
+      plateMoveMoved.current = plateMove.current.moved
+      plateMove.current = null
       marqueeActive.current = false
       setMarquee(null)
       return
@@ -1180,19 +1250,93 @@ export function FloorPlanCanvas() {
             )
           })}
 
+          {(floor.plates ?? []).map((plate) => {
+            const selected = isFloorPlateSelected(selection, plate.id)
+            const rect = floorPlateRect(plate)
+            const hitPts = worldRingToScreen(rect, toScreen)
+            const mid = toScreen(plate.x, plate.y)
+            return (
+              <Group key={plate.id}>
+                <Line
+                  points={hitPts}
+                  closed
+                  fill={
+                    selected
+                      ? 'rgba(196, 92, 38, 0.18)'
+                      : 'rgba(90, 122, 90, 0.16)'
+                  }
+                  stroke={selected ? '#c45c26' : '#5a7a5a'}
+                  strokeWidth={selected ? 2 : 1.5}
+                  onMouseEnter={(e) => {
+                    if (tool !== 'select') return
+                    const c = e.target.getStage()?.container()
+                    if (c) c.style.cursor = 'grab'
+                  }}
+                  onMouseLeave={(e) => {
+                    const c = e.target.getStage()?.container()
+                    if (c) c.style.cursor = 'default'
+                  }}
+                  onMouseDown={(e) => {
+                    if (tool !== 'select' || e.evt.button !== 0) return
+                    if (e.evt.shiftKey || spaceDown.current || e.evt.altKey)
+                      return
+                    e.cancelBubble = true
+                    marqueeActive.current = false
+                    setMarquee(null)
+                    setSelection({ kind: 'floorPlate', id: plate.id })
+                    const stage = e.target.getStage()
+                    const pos = stage?.getPointerPosition()
+                    const w = pos ? toWorld(pos.x, pos.y) : { x: 0, y: 0 }
+                    plateMove.current = {
+                      id: plate.id,
+                      start: { x: w.x, y: w.y },
+                      origin: { x: plate.x, y: plate.y },
+                      moved: false,
+                    }
+                    const c = e.target.getStage()?.container()
+                    if (c) c.style.cursor = 'grabbing'
+                  }}
+                  onClick={(e) => {
+                    e.cancelBubble = true
+                    if (plateMoveMoved.current) {
+                      plateMoveMoved.current = false
+                      return
+                    }
+                    if (tool === 'select') {
+                      setSelection({ kind: 'floorPlate', id: plate.id })
+                    }
+                  }}
+                />
+                <Text
+                  x={mid.x - 8}
+                  y={mid.y - 8}
+                  text="П"
+                  fontSize={14}
+                  fontFamily="IBM Plex Sans, sans-serif"
+                  fill={selected ? '#c45c26' : '#5a7a5a'}
+                  listening={false}
+                />
+              </Group>
+            )
+          })}
+
           {(floor.objects ?? []).map((obj) => {
             const selected = isObjectSelected(selection, obj.id)
             const mid = toScreen(obj.x, obj.y)
+            const half = planHalfSizeOf(obj)
+            const w = Math.max(6, half.x * 2 * scale)
+            const h = Math.max(6, half.y * 2 * scale)
             return (
               <Group key={obj.id}>
-                <Circle
-                  x={mid.x}
-                  y={mid.y}
-                  radius={10}
+                <Rect
+                  x={mid.x - w / 2}
+                  y={mid.y - h / 2}
+                  width={w}
+                  height={h}
                   fill={
                     selected
-                      ? 'rgba(196, 92, 38, 0.35)'
-                      : 'rgba(42, 111, 106, 0.25)'
+                      ? 'rgba(196, 92, 38, 0.28)'
+                      : 'rgba(42, 111, 106, 0.18)'
                   }
                   stroke={selected ? '#c45c26' : '#2a6f6a'}
                   strokeWidth={selected ? 2 : 1.5}
@@ -1206,10 +1350,10 @@ export function FloorPlanCanvas() {
                     setSelection({ kind: 'object', id: obj.id })
                     const stage = e.target.getStage()
                     const pos = stage?.getPointerPosition()
-                    const w = pos ? toWorld(pos.x, pos.y) : { x: 0, y: 0 }
+                    const world = pos ? toWorld(pos.x, pos.y) : { x: 0, y: 0 }
                     objectMove.current = {
                       id: obj.id,
-                      start: { x: w.x, y: w.y },
+                      start: { x: world.x, y: world.y },
                       origin: { x: obj.x, y: obj.y },
                       moved: false,
                     }
@@ -1224,14 +1368,6 @@ export function FloorPlanCanvas() {
                       setSelection({ kind: 'object', id: obj.id })
                     }
                   }}
-                />
-                <Text
-                  x={mid.x - 6}
-                  y={mid.y - 6}
-                  text="◼"
-                  fontSize={12}
-                  fill={selected ? '#c45c26' : '#2a6f6a'}
-                  listening={false}
                 />
               </Group>
             )
@@ -1278,6 +1414,28 @@ export function FloorPlanCanvas() {
                   closed
                   fill="rgba(42, 111, 106, 0.22)"
                   stroke="#2a6f6a"
+                  strokeWidth={1.5}
+                  dash={[5, 4]}
+                  listening={false}
+                />
+              )
+            })()}
+
+          {floorPlateDraft &&
+            (() => {
+              const preview = createFloorPlateFromDrag(
+                floorPlateDraft.x0,
+                floorPlateDraft.y0,
+                floorPlateDraft.x1,
+                floorPlateDraft.y1,
+              )
+              const pts = worldRingToScreen(floorPlateRect(preview), toScreen)
+              return (
+                <Line
+                  points={pts}
+                  closed
+                  fill="rgba(90, 122, 90, 0.22)"
+                  stroke="#5a7a5a"
                   strokeWidth={1.5}
                   dash={[5, 4]}
                   listening={false}
@@ -1353,7 +1511,9 @@ export function FloorPlanCanvas() {
             )
           })}
 
-          <ConstraintPictograms floor={floor} toScreen={toScreen} />
+          {workbench === 'draft' && (
+            <ConstraintPictograms floor={floor} toScreen={toScreen} />
+          )}
           {marqueeRect}
         </Layer>
       </Stage>

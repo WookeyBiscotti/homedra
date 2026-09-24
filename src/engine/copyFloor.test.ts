@@ -55,6 +55,7 @@ describe('applyFloorCopy', () => {
     const result = applyFloorCopy(target, source, {
       ...DEFAULT_COPY_FLOOR_OPTIONS,
       stairs: false,
+      plates: false,
     })
 
     expect(result.id).toBe(target.id)
@@ -93,6 +94,7 @@ describe('applyFloorCopy', () => {
       windows: false,
       passages: false,
       stairs: false,
+      plates: false,
     })
 
     expect(result.constraints).toHaveLength(0)
@@ -110,6 +112,7 @@ describe('applyFloorCopy', () => {
       windows: false,
       passages: false,
       stairs: false,
+      plates: false,
     })
 
     expect(result.walls).toHaveLength(2)

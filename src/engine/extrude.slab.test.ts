@@ -101,6 +101,53 @@ describe('extrudeFloorSlabs', () => {
     expect(Math.max(...zs)).toBeCloseTo(2.5, 5)
   })
 
+  it('builds a slab from a free floor plate without walls', () => {
+    const floor = createEmptyFloor('Plate', 0, 2.8)
+    floor.plates = [
+      {
+        id: createId('plt'),
+        x: 2,
+        y: 1.5,
+        width: 4,
+        depth: 3,
+      },
+    ]
+    const slab = extrudeFloorSlabs(floor)
+    expect(slab.regions.length).toBe(1)
+    const xs = slab.regions[0].outer.map((p) => p.x)
+    const zs = slab.regions[0].outer.map((p) => p.z)
+    expect(Math.min(...xs)).toBeCloseTo(0, 5)
+    expect(Math.max(...xs)).toBeCloseTo(4, 5)
+    expect(Math.min(...zs)).toBeCloseTo(0, 5)
+    expect(Math.max(...zs)).toBeCloseTo(3, 5)
+  })
+
+  it('cuts stair wells in free floor plates', () => {
+    const floor = createEmptyFloor('Plate', 0, 2.8)
+    floor.plates = [
+      {
+        id: createId('plt'),
+        x: 3,
+        y: 2,
+        width: 6,
+        depth: 4,
+      },
+    ]
+    floor.slabOpenings = [
+      {
+        id: createId('sop'),
+        kind: 'stair',
+        x: 3,
+        y: 2,
+        width: 1,
+        depth: 1,
+      },
+    ]
+    const slab = extrudeFloorSlabs(floor)
+    expect(slab.regions.length).toBe(1)
+    expect(slab.regions[0].holes.length).toBe(1)
+  })
+
   it('covers L-shaped rooms without atan2 self-intersection', () => {
     const floor: Floor = {
       id: createId('floor'),

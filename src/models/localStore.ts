@@ -1,8 +1,6 @@
-/** IndexedDB store for user-uploaded and cached library GLBs. */
+/** IndexedDB store for user-uploaded GLBs (legacy "local" tab). */
 
-const DB_NAME = 'interior-models'
-const DB_VERSION = 1
-const STORE = 'models'
+import { openModelsDb, idbReq, STORE_MODELS } from './idb'
 
 export interface LocalModelRecord {
   id: string
@@ -16,32 +14,11 @@ export interface LocalModelRecord {
   attribution?: { author: string; license: string; url?: string }
 }
 
-function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION)
-    req.onerror = () => reject(req.error ?? new Error('IDB open failed'))
-    req.onsuccess = () => resolve(req.result)
-    req.onupgradeneeded = () => {
-      const db = req.result
-      if (!db.objectStoreNames.contains(STORE)) {
-        db.createObjectStore(STORE, { keyPath: 'id' })
-      }
-    }
-  })
-}
-
-function idbReq<T>(req: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    req.onsuccess = () => resolve(req.result)
-    req.onerror = () => reject(req.error ?? new Error('IDB request failed'))
-  })
-}
-
 export async function putLocalModel(rec: LocalModelRecord): Promise<void> {
-  const db = await openDb()
+  const db = await openModelsDb()
   try {
-    const tx = db.transaction(STORE, 'readwrite')
-    await idbReq(tx.objectStore(STORE).put(rec))
+    const tx = db.transaction(STORE_MODELS, 'readwrite')
+    await idbReq(tx.objectStore(STORE_MODELS).put(rec))
   } finally {
     db.close()
   }
@@ -50,10 +27,10 @@ export async function putLocalModel(rec: LocalModelRecord): Promise<void> {
 export async function getLocalModel(
   id: string,
 ): Promise<LocalModelRecord | undefined> {
-  const db = await openDb()
+  const db = await openModelsDb()
   try {
-    const tx = db.transaction(STORE, 'readonly')
-    const row = await idbReq(tx.objectStore(STORE).get(id))
+    const tx = db.transaction(STORE_MODELS, 'readonly')
+    const row = await idbReq(tx.objectStore(STORE_MODELS).get(id))
     return row as LocalModelRecord | undefined
   } finally {
     db.close()
@@ -61,10 +38,10 @@ export async function getLocalModel(
 }
 
 export async function listLocalModels(): Promise<LocalModelRecord[]> {
-  const db = await openDb()
+  const db = await openModelsDb()
   try {
-    const tx = db.transaction(STORE, 'readonly')
-    const rows = await idbReq(tx.objectStore(STORE).getAll())
+    const tx = db.transaction(STORE_MODELS, 'readonly')
+    const rows = await idbReq(tx.objectStore(STORE_MODELS).getAll())
     return (rows as LocalModelRecord[]).sort((a, b) => b.createdAt - a.createdAt)
   } finally {
     db.close()
@@ -72,10 +49,10 @@ export async function listLocalModels(): Promise<LocalModelRecord[]> {
 }
 
 export async function deleteLocalModel(id: string): Promise<void> {
-  const db = await openDb()
+  const db = await openModelsDb()
   try {
-    const tx = db.transaction(STORE, 'readwrite')
-    await idbReq(tx.objectStore(STORE).delete(id))
+    const tx = db.transaction(STORE_MODELS, 'readwrite')
+    await idbReq(tx.objectStore(STORE_MODELS).delete(id))
   } finally {
     db.close()
   }

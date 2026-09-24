@@ -650,17 +650,19 @@ export function hasAxisConstraint(
   return constraints.some((c) => c.type === type && c.wallId === wallId)
 }
 
+import { publicUrl } from '../../publicUrl'
+
 export const CONSTRAINT_ICONS = {
-  fixedLength: '/icons/constraints/distance-constraint.svg',
-  fixedPosition: '/icons/constraints/lock-constraint.svg',
-  horizontal: '/icons/constraints/horizontal-constraint.svg',
-  vertical: '/icons/constraints/vertical-constraint.svg',
-  wallDistance: '/icons/constraints/distancepl-constraint.svg',
-  vertexDistance: '/icons/constraints/distance-constraint.svg',
-  pointsHorizontal: '/icons/constraints/horizontal-constraint.svg',
-  pointsVertical: '/icons/constraints/vertical-constraint.svg',
-  coincident: '/icons/constraints/coincident-constraint.svg',
-  pointOnWall: '/icons/constraints/point-on-line-constraint.svg',
+  fixedLength: publicUrl('icons/constraints/distance-constraint.svg'),
+  fixedPosition: publicUrl('icons/constraints/lock-constraint.svg'),
+  horizontal: publicUrl('icons/constraints/horizontal-constraint.svg'),
+  vertical: publicUrl('icons/constraints/vertical-constraint.svg'),
+  wallDistance: publicUrl('icons/constraints/distancepl-constraint.svg'),
+  vertexDistance: publicUrl('icons/constraints/distance-constraint.svg'),
+  pointsHorizontal: publicUrl('icons/constraints/horizontal-constraint.svg'),
+  pointsVertical: publicUrl('icons/constraints/vertical-constraint.svg'),
+  coincident: publicUrl('icons/constraints/coincident-constraint.svg'),
+  pointOnWall: publicUrl('icons/constraints/point-on-line-constraint.svg'),
 } as const
 
 export function hasPointOnWall(

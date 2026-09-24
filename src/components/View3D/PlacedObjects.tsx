@@ -1,19 +1,62 @@
-import { useGLTF } from '@react-three/drei'
+import { TransformControls, useGLTF } from '@react-three/drei'
+import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import {
   Component,
   Suspense,
   useEffect,
   useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
+  type RefObject,
 } from 'react'
-import type { ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { Floor, ModelRef, PlacedObject } from '../../engine/types'
+import { snapToGrid } from '../../engine/geometry/walls'
+import { snapObjectXY, planHalfSizeOf } from '../../engine/geometry/objectSnap'
 import { resolveModelRef } from '../../models/resolveModel'
 import { cloneSceneSelection } from '../../models/sceneParts'
+import {
+  clearLivePlanHalf,
+  livePlanHalfMap,
+  setLivePlanHalf,
+} from '../../models/objectFootprintCache'
 import { useBuildingStore } from '../../store/buildingStore'
+import { useApplyAppearance } from '../../hooks/useApplyAppearance'
+
+const AABB_COLOR = '#c45c26'
+
+/** World-space AABB wireframe, updated every frame while the target moves. */
+function SelectionAabb({
+  targetRef,
+}: {
+  targetRef: RefObject<THREE.Object3D | null>
+}) {
+  const box = useMemo(() => new THREE.Box3(), [])
+  const helper = useMemo(() => {
+    const h = new THREE.Box3Helper(box, new THREE.Color(AABB_COLOR))
+    h.raycast = () => {}
+    return h
+  }, [box])
+
+  useFrame(() => {
+    const target = targetRef.current
+    if (!target) return
+    box.setFromObject(target)
+    if (box.isEmpty()) return
+    helper.updateMatrixWorld(true)
+  })
+
+  useEffect(() => {
+    return () => {
+      helper.geometry.dispose()
+      ;(helper.material as THREE.Material).dispose()
+    }
+  }, [helper])
+
+  return <primitive object={helper} />
+}
 
 function normalizeRoot(root: THREE.Object3D): void {
   root.updateMatrixWorld(true)
@@ -24,6 +67,35 @@ function normalizeRoot(root: THREE.Object3D): void {
   root.position.x -= center.x
   root.position.z -= center.z
   root.position.y -= box.min.y
+}
+
+/**
+ * Local model AABB (pre-instance scale/rotation).
+ * Must not use setFromObject while the mesh sits under a scaled parent —
+ * that would bake scale into sizeX and make planHalfSizeOf double-scale.
+ */
+function measureLocalModelSize(
+  group: THREE.Object3D,
+  scene: THREE.Object3D,
+): { x: number; y: number; z: number } | null {
+  const pos = group.position.clone()
+  const rot = group.rotation.clone()
+  const scl = group.scale.clone()
+  group.position.set(0, 0, 0)
+  group.rotation.set(0, 0, 0)
+  group.scale.set(1, 1, 1)
+  group.updateMatrixWorld(true)
+  const box = new THREE.Box3().setFromObject(scene)
+  group.position.copy(pos)
+  group.rotation.copy(rot)
+  group.scale.copy(scl)
+  group.updateMatrixWorld(true)
+  if (box.isEmpty() || !Number.isFinite(box.min.x)) return null
+  return {
+    x: Math.max(0.05, box.max.x - box.min.x),
+    y: Math.max(0.05, box.max.y - box.min.y),
+    z: Math.max(0.05, box.max.z - box.min.z),
+  }
 }
 
 function modelResolveKey(model: ModelRef): string {
@@ -39,6 +111,16 @@ function modelResolveKey(model: ModelRef): string {
     case 'library':
       return `library:${model.library}:${model.id}:${model.glbUrl ?? ''}:${model.objectId ?? ''}`
   }
+}
+
+function applyPlacedTransform(
+  group: THREE.Object3D,
+  obj: PlacedObject,
+  floorElevation: number,
+): void {
+  group.position.set(obj.x, floorElevation + (obj.elevation ?? 0), -obj.y)
+  group.rotation.set(obj.rotationX ?? 0, obj.rotationY, obj.rotationZ ?? 0)
+  group.scale.set(obj.scaleX, obj.scaleY, obj.scaleZ)
 }
 
 function GlbInstance({
@@ -58,7 +140,24 @@ function GlbInstance({
   onSelect: () => void
   shadowsEnabled: boolean
 }) {
+  const groupRef = useRef<THREE.Group>(null)
   const gltf = useGLTF(url)
+  const { camera, gl, invalidate } = useThree()
+  const updatePlacedObject = useBuildingStore((s) => s.updatePlacedObject)
+  const gizmoMode = useBuildingStore((s) => s.transformGizmoMode)
+  const setTransformDragging = useBuildingStore((s) => s.setTransformDragging)
+  const cycleTransformGizmoMode = useBuildingStore(
+    (s) => s.cycleTransformGizmoMode,
+  )
+  const dragging = useBuildingStore((s) => s.transformDragging)
+  const sceneMode = useBuildingStore((s) => s.sceneMode)
+  const pendingModel = useBuildingStore((s) => s.pendingModel)
+  const objectSnapEnabled = useBuildingStore((s) => s.objectSnapEnabled)
+  const floor = useBuildingStore((s) => s.activeFloor())
+  const xyDragCleanup = useRef<(() => void) | null>(null)
+  /** Local flag so we don't skip applyPlacedTransform after store catch-up */
+  const xyDragging = useRef(false)
+
   const scene = useMemo(() => {
     const clone = cloneSceneSelection(gltf.scene, objectId)
     normalizeRoot(clone)
@@ -72,24 +171,222 @@ function GlbInstance({
     return clone
   }, [gltf.scene, objectId, shadowsEnabled])
 
+  useApplyAppearance(scene, obj.appearance)
+
+  useLayoutEffect(() => {
+    if (!groupRef.current || dragging || xyDragging.current) return
+    applyPlacedTransform(groupRef.current, obj, floorElevation)
+  }, [obj, floorElevation, dragging])
+
+  // Publish live + persisted plan AABB from the same world box as the 3D helper.
+  useLayoutEffect(() => {
+    const g = groupRef.current
+    if (!g || dragging || xyDragging.current) return
+    applyPlacedTransform(g, obj, floorElevation)
+    const box = new THREE.Box3().setFromObject(g)
+    if (box.isEmpty()) return
+
+    const planHalfX = Math.max(0.05, (box.max.x - box.min.x) / 2)
+    const planHalfY = Math.max(0.05, (box.max.z - box.min.z) / 2)
+    setLivePlanHalf(obj.id, { x: planHalfX, y: planHalfY })
+
+    const local = measureLocalModelSize(g, scene)
+    const sizePatch =
+      local &&
+      (Math.abs(obj.sizeX - local.x) > 0.03 ||
+        Math.abs(obj.sizeY - local.y) > 0.03 ||
+        Math.abs(obj.sizeZ - local.z) > 0.03)
+        ? { sizeX: local.x, sizeY: local.y, sizeZ: local.z }
+        : null
+    const aabbStale =
+      Math.abs(obj.planHalfX - planHalfX) > 0.02 ||
+      Math.abs(obj.planHalfY - planHalfY) > 0.02
+
+    if (!sizePatch && !aabbStale) return
+
+    useBuildingStore.setState((st) => {
+      const floor = st.activeFloor()
+      const objects = (floor.objects ?? []).map((o) =>
+        o.id === obj.id
+          ? {
+              ...o,
+              ...(sizePatch ?? {}),
+              planHalfX,
+              planHalfY,
+            }
+          : o,
+      )
+      return {
+        building: {
+          ...st.building,
+          floors: st.building.floors.map((f) =>
+            f.id === floor.id ? { ...f, objects } : f,
+          ),
+        },
+      }
+    })
+  }, [obj, floorElevation, scene, dragging])
+
+  useEffect(() => {
+    return () => {
+      clearLivePlanHalf(obj.id)
+      xyDragCleanup.current?.()
+      xyDragCleanup.current = null
+    }
+  }, [obj.id])
+
+  // Gizmo in any 3D orbit mode when object is selected (not visit / paint)
+  const showGizmo =
+    selected && sceneMode !== 'visit' && sceneMode !== 'paint'
+
+  const snapPlanXY = (x: number, y: number) => {
+    if (!objectSnapEnabled) return { x, y, snappedX: false, snappedY: false }
+    const g = groupRef.current
+    let halfSize = planHalfSizeOf(obj)
+    if (g) {
+      const box = new THREE.Box3().setFromObject(g)
+      if (!box.isEmpty()) {
+        halfSize = {
+          x: Math.max(0.05, (box.max.x - box.min.x) / 2),
+          y: Math.max(0.05, (box.max.z - box.min.z) / 2),
+        }
+        setLivePlanHalf(obj.id, halfSize)
+      }
+    }
+    return snapObjectXY(floor, x, y, {
+      excludeObjectId: obj.id,
+      halfSize,
+      otherHalfSizes: livePlanHalfMap(),
+    })
+  }
+
+  const commitTransform = (applyObjectSnap: boolean) => {
+    const g = groupRef.current
+    if (!g) return
+    let px = g.position.x
+    let py = -g.position.z
+    if (applyObjectSnap) {
+      const sn = snapPlanXY(px, py)
+      px = sn.snappedX ? sn.x : snapToGrid(sn.x)
+      py = sn.snappedY ? sn.y : snapToGrid(sn.y)
+    } else {
+      px = snapToGrid(px)
+      py = snapToGrid(py)
+    }
+    g.position.x = px
+    g.position.z = -py
+    g.updateMatrixWorld(true)
+    const box = new THREE.Box3().setFromObject(g)
+    const planHalfX = box.isEmpty()
+      ? undefined
+      : Math.max(0.05, (box.max.x - box.min.x) / 2)
+    const planHalfY = box.isEmpty()
+      ? undefined
+      : Math.max(0.05, (box.max.z - box.min.z) / 2)
+    if (planHalfX != null && planHalfY != null) {
+      setLivePlanHalf(obj.id, { x: planHalfX, y: planHalfY })
+    }
+    updatePlacedObject(obj.id, {
+      x: px,
+      y: py,
+      elevation: Math.max(0, g.position.y - floorElevation),
+      rotationX: g.rotation.x,
+      rotationY: g.rotation.y,
+      rotationZ: g.rotation.z,
+      scaleX: Math.max(0.01, g.scale.x),
+      scaleY: Math.max(0.01, g.scale.y),
+      scaleZ: Math.max(0.01, g.scale.z),
+      ...(planHalfX != null && planHalfY != null
+        ? { planHalfX, planHalfY }
+        : {}),
+    })
+  }
+
+  const startXyDrag = (e: ThreeEvent<PointerEvent>) => {
+    if (e.button !== 0) return
+    if (pendingModel) return
+    if (sceneMode === 'visit' || sceneMode === 'paint') return
+    e.stopPropagation()
+    onSelect()
+
+    const planeY = floorElevation + (obj.elevation ?? 0)
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -planeY)
+    const hit = new THREE.Vector3()
+    const raycaster = new THREE.Raycaster()
+    const ndc = new THREE.Vector2()
+    let moved = false
+
+    xyDragging.current = true
+    setTransformDragging(true)
+
+    const onMove = (ev: PointerEvent) => {
+      const g = groupRef.current
+      if (!g) return
+      const rect = gl.domElement.getBoundingClientRect()
+      ndc.set(
+        ((ev.clientX - rect.left) / rect.width) * 2 - 1,
+        -((ev.clientY - rect.top) / rect.height) * 2 + 1,
+      )
+      raycaster.setFromCamera(ndc, camera)
+      if (!raycaster.ray.intersectPlane(plane, hit)) return
+      const sn = snapPlanXY(hit.x, -hit.z)
+      g.position.x = sn.x
+      g.position.z = -sn.y
+      moved = true
+      invalidate()
+    }
+
+    const onUp = () => {
+      xyDragging.current = false
+      setTransformDragging(false)
+      gl.domElement.removeEventListener('pointermove', onMove)
+      gl.domElement.removeEventListener('pointerup', onUp)
+      gl.domElement.removeEventListener('pointercancel', onUp)
+      xyDragCleanup.current = null
+      if (moved) commitTransform(true)
+      else invalidate()
+    }
+
+    xyDragCleanup.current?.()
+    gl.domElement.addEventListener('pointermove', onMove)
+    gl.domElement.addEventListener('pointerup', onUp)
+    gl.domElement.addEventListener('pointercancel', onUp)
+    xyDragCleanup.current = onUp
+  }
+
   return (
-    <group
-      position={[obj.x, floorElevation, -obj.y]}
-      rotation={[0, obj.rotationY, 0]}
-      scale={obj.scale}
-      onClick={(e: ThreeEvent<MouseEvent>) => {
-        e.stopPropagation()
-        onSelect()
-      }}
-    >
-      <primitive object={scene} />
-      {selected && (
-        <mesh position={[0, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <ringGeometry args={[0.35, 0.45, 32]} />
-          <meshBasicMaterial color="#c45c26" transparent opacity={0.85} />
-        </mesh>
+    <>
+      <group
+        ref={groupRef}
+        onClick={(e: ThreeEvent<MouseEvent>) => {
+          e.stopPropagation()
+          onSelect()
+        }}
+        onDoubleClick={(e: ThreeEvent<MouseEvent>) => {
+          e.stopPropagation()
+          onSelect()
+          cycleTransformGizmoMode()
+        }}
+        onPointerDown={startXyDrag}
+      >
+        <primitive object={scene} />
+      </group>
+      {showGizmo && <SelectionAabb targetRef={groupRef} />}
+      {showGizmo && (
+        <TransformControls
+          key={`${obj.id}-${gizmoMode}`}
+          object={groupRef as RefObject<THREE.Object3D>}
+          mode={gizmoMode}
+          size={1}
+          space="world"
+          onMouseDown={() => setTransformDragging(true)}
+          onMouseUp={() => {
+            setTransformDragging(false)
+            commitTransform(gizmoMode === 'translate')
+          }}
+        />
       )}
-    </group>
+    </>
   )
 }
 
@@ -121,7 +418,7 @@ function PlaceholderObject({
   const selectObject = useBuildingStore((s) => s.selectObject)
   return (
     <mesh
-      position={[obj.x, floorElevation + 0.25, -obj.y]}
+      position={[obj.x, floorElevation + (obj.elevation ?? 0) + 0.25, -obj.y]}
       onClick={(e) => {
         e.stopPropagation()
         selectObject(floorId, obj.id)
@@ -176,7 +473,6 @@ function ResolvedObject({
       cancelled = true
       if (localRevoke && objectUrl) URL.revokeObjectURL(objectUrl)
     }
-    // resolveKey captures identity of the model ref fields we care about
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resolveKey])
 
@@ -225,22 +521,33 @@ export function PlaceObjectFloorHit({
   floor: Floor
 }) {
   const tool = useBuildingStore((s) => s.tool)
+  const pendingModel = useBuildingStore((s) => s.pendingModel)
   const placeObjectAt = useBuildingStore((s) => s.placeObjectAt)
-  if (tool !== 'placeObject') return null
+  if (tool !== 'placeObject' || !pendingModel) return null
 
-  const size = 80
+  const size = 200
+  const place = (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation()
+    if (e.button !== 0) return
+    const p = e.point
+    placeObjectAt(p.x, -p.z)
+  }
+
   return (
     <mesh
       rotation={[-Math.PI / 2, 0, 0]}
-      position={[0, floor.elevation + 0.01, 0]}
-      onClick={(e: ThreeEvent<MouseEvent>) => {
-        e.stopPropagation()
-        const p = e.point
-        placeObjectAt(p.x, -p.z)
-      }}
+      position={[0, floor.elevation + 0.05, 0]}
+      onPointerDown={place}
+      renderOrder={1000}
     >
       <planeGeometry args={[size, size]} />
-      <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+      <meshBasicMaterial
+        transparent
+        opacity={0}
+        depthWrite={false}
+        depthTest={false}
+        side={THREE.DoubleSide}
+      />
     </mesh>
   )
 }

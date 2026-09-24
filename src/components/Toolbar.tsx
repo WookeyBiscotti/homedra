@@ -9,6 +9,7 @@ const drawTools: { id: Tool; label: string; hint: string }[] = [
   { id: 'passage', label: 'Проём', hint: 'O' },
   { id: 'window', label: 'Окно', hint: 'N' },
   { id: 'stair', label: 'Лестн. пол', hint: 'S' },
+  { id: 'floor', label: 'Пол', hint: 'B' },
 ]
 
 const constraintTools: { id: Tool; label: string; hint: string }[] = [
@@ -108,8 +109,8 @@ export function Toolbar() {
             </button>
           </div>
           <p className="hint">
-            Стена: клик — начало/конец. Проёмы (D/O/N). Лестница (S). Ограничения
-            — клик по стене или точке. Shift — мультивыбор.
+            Стена: клик — начало/конец. Проёмы (D/O/N). Лестница (S). Пол без
+            стен (B). Ограничения — клик по стене или точке. Shift — мультивыбор.
           </p>
         </>
       )}

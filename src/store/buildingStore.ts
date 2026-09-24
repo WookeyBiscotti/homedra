@@ -19,6 +19,7 @@ import {
   snapToGrid,
   splitWallAt,
 } from '../engine/geometry/walls'
+import { snapObjectXY, planHalfSizeOf } from '../engine/geometry/objectSnap'
 import {
   wallsShareAxis,
   detectRooms,
@@ -37,6 +38,7 @@ import {
   createId,
   DEFAULT_LIGHTING,
   ensureBuildingOpenings,
+  estimatePlanHalf,
   type Floor,
   isGroundFloor,
   isStoryFloor,
@@ -44,6 +46,7 @@ import {
   type MaterialRef,
   type ModelAttribution,
   type ModelRef,
+  type ObjectAppearance,
   type OpeningKind,
   type PlacedObject,
   recalcFloorElevations,
@@ -53,6 +56,7 @@ import {
   selectedWallIds,
   storyFloors,
   type Tool,
+  type TransformGizmoMode,
   toolsForWorkbench,
   type ViewMode,
   type WallSide,
@@ -72,6 +76,18 @@ import {
   hitSlabOpening,
   updateSlabOpeningFields,
 } from '../engine/geometry/slabOpenings'
+import {
+  createFloorPlateFromDrag,
+  floorPlateIdFromKey,
+  hitFloorPlate,
+  setFloorPlateMaterial as applyFloorPlateMaterial,
+  updateFloorPlateFields,
+} from '../engine/geometry/floorPlates'
+import {
+  applyProjectPackage,
+  buildProjectPackage,
+  parseImportJson,
+} from '../models/projectPackage'
 
 const STORAGE_KEY = 'interior-planner-project'
 const MAX_HISTORY = 50
@@ -124,6 +140,13 @@ interface BuildingState {
   } | null
   /** Drag-rect draft for stair well in the slab */
   slabOpeningDraft: {
+    x0: number
+    y0: number
+    x1: number
+    y1: number
+  } | null
+  /** Drag-rect draft for free floor plate (no walls) */
+  floorPlateDraft: {
     x0: number
     y0: number
     x1: number
@@ -197,29 +220,91 @@ interface BuildingState {
   /** Move slab opening by center (no history). */
   dragSlabOpening: (id: string, x: number, y: number) => void
 
+  beginFloorPlate: (x: number, y: number) => void
+  updateFloorPlateDraft: (x: number, y: number) => void
+  finishFloorPlate: () => void
+  cancelFloorPlateDraft: () => void
+  updateFloorPlate: (
+    id: string,
+    patch: Partial<{ x: number; y: number; width: number; depth: number }>,
+  ) => void
+  /** Move floor plate by center (no history). */
+  dragFloorPlate: (id: string, x: number, y: number) => void
+  setFloorPlateMaterial: (
+    id: string,
+    material: MaterialRef | null,
+  ) => void
+  /** Select a floor plate, switching active floor if needed. */
+  selectFloorPlate: (floorId: string, id: string) => void
+
   /** Pending model to place with the placeObject tool (3D or 2D). */
   pendingModel: {
     model: ModelRef
     attribution?: ModelAttribution
+    /** Default scale from collection calibration. */
+    scale?: number
+    /** Local model bbox before scale (meters). */
+    sizeX?: number
+    sizeY?: number
+    sizeZ?: number
+    appearance?: ObjectAppearance
   } | null
   modelBrowserOpen: boolean
+  collectionBrowserOpen: boolean
   libraryTokensOpen: boolean
   setModelBrowserOpen: (open: boolean) => void
+  setCollectionBrowserOpen: (open: boolean) => void
   setLibraryTokensOpen: (open: boolean) => void
   setPendingModel: (
     pending: {
       model: ModelRef
       attribution?: ModelAttribution
+      scale?: number
+      sizeX?: number
+      sizeY?: number
+      sizeZ?: number
+      appearance?: ObjectAppearance
     } | null,
   ) => void
   placeObjectAt: (x: number, y: number) => void
   updatePlacedObject: (
     id: string,
-    patch: Partial<Pick<PlacedObject, 'x' | 'y' | 'rotationY' | 'scale'>>,
+    patch: Partial<
+      Pick<
+        PlacedObject,
+        | 'x'
+        | 'y'
+        | 'elevation'
+        | 'rotationX'
+        | 'rotationY'
+        | 'rotationZ'
+        | 'scaleX'
+        | 'scaleY'
+        | 'scaleZ'
+        | 'sizeX'
+        | 'sizeY'
+        | 'sizeZ'
+        | 'planHalfX'
+        | 'planHalfY'
+        | 'appearance'
+      >
+    >,
   ) => void
   /** Drag placed object in plan (no history). */
   dragPlacedObject: (id: string, x: number, y: number) => void
   selectObject: (floorId: string, id: string) => void
+
+  transformGizmoMode: TransformGizmoMode
+  setTransformGizmoMode: (mode: TransformGizmoMode) => void
+  /** Cycle translate → rotate → scale → translate. */
+  cycleTransformGizmoMode: () => void
+  /** True while TransformControls is dragging (disables orbit). */
+  transformDragging: boolean
+  setTransformDragging: (dragging: boolean) => void
+  /** Snap placed objects to walls / other objects. */
+  objectSnapEnabled: boolean
+  setObjectSnapEnabled: (enabled: boolean) => void
+  toggleObjectSnap: () => void
 
   selectAt: (x: number, y: number) => void
   selectInRect: (minX: number, minY: number, maxX: number, maxY: number) => void
@@ -300,8 +385,11 @@ interface BuildingState {
 
   saveLocal: () => void
   loadLocal: () => boolean
+  /** Sync building-only JSON (localStorage). */
   exportJson: () => string
-  importJson: (json: string) => boolean
+  /** Async project package with asset cache (file export). */
+  exportProjectPackage: () => Promise<string>
+  importJson: (json: string) => Promise<boolean>
   newProject: () => void
 }
 
@@ -332,9 +420,14 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     wallDraftFrom: null,
     openingDraft: null,
     slabOpeningDraft: null,
+    floorPlateDraft: null,
     pendingModel: null,
     modelBrowserOpen: false,
+    collectionBrowserOpen: false,
     libraryTokensOpen: false,
+    transformGizmoMode: 'translate',
+    transformDragging: false,
+    objectSnapEnabled: true,
     history: [],
     future: [],
     statusMessage: null,
@@ -366,7 +459,8 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         selection: null,
         wallDraftFrom: null,
         openingDraft: null,
-    slabOpeningDraft: null,
+        slabOpeningDraft: null,
+        floorPlateDraft: null,
       })
     },
 
@@ -384,6 +478,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         selection: null,
         openingDraft: null,
         slabOpeningDraft: null,
+        floorPlateDraft: null,
       })
     },
 
@@ -393,13 +488,16 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       if (tool === 'placeObject') {
         set({
           workbench: 'furnish',
-          tool,
+          tool: 'select',
           wallDraftFrom: null,
           openingDraft: null,
           slabOpeningDraft: null,
-          modelBrowserOpen: true,
+          floorPlateDraft: null,
+          collectionBrowserOpen: false,
+          modelBrowserOpen: false,
+          viewMode: '3d',
           sceneMode: get().sceneMode === 'paint' ? 'interior' : get().sceneMode,
-          statusMessage: null,
+          statusMessage: 'Выберите объект в списке коллекции слева',
         })
         return
       }
@@ -418,6 +516,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         wallDraftFrom: null,
         openingDraft: null,
         slabOpeningDraft: null,
+        floorPlateDraft: null,
         statusMessage: null,
       })
     },
@@ -427,6 +526,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         wallDraftFrom: null as string | null,
         openingDraft: null,
         slabOpeningDraft: null,
+        floorPlateDraft: null,
         statusMessage: null as string | null,
       }
       if (workbench === 'draft') {
@@ -436,6 +536,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
           sceneMode: prev === 'paint' ? 'interior' : prev,
           tool: 'select',
           modelBrowserOpen: false,
+          collectionBrowserOpen: false,
           ...drafts,
         })
         return
@@ -448,6 +549,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
           tool: 'select',
           pendingModel: null,
           modelBrowserOpen: false,
+          collectionBrowserOpen: false,
           ...drafts,
         })
         return
@@ -503,6 +605,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         wallDraftFrom: null,
         openingDraft: null,
         slabOpeningDraft: null,
+        floorPlateDraft: null,
         statusMessage: null,
       }),
     selectSlabOpening: (floorId, id) =>
@@ -512,6 +615,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         wallDraftFrom: null,
         openingDraft: null,
         slabOpeningDraft: null,
+        floorPlateDraft: null,
         statusMessage: null,
       }),
     setBuildingName: (name) => {
@@ -590,6 +694,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         wallDraftFrom: null,
         openingDraft: null,
         slabOpeningDraft: null,
+        floorPlateDraft: null,
         conflict: false,
         ...(floor && isGroundFloor(floor) ? { tool: 'select' as const } : {}),
       })
@@ -829,12 +934,89 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       set({
         building: replaceFloor(get().building, next),
         slabOpeningDraft: null,
+        floorPlateDraft: null,
         selection: { kind: 'slabOpening', id: opening.id },
         statusMessage: null,
       })
     },
 
     cancelSlabOpeningDraft: () => set({ slabOpeningDraft: null }),
+
+    beginFloorPlate: (x, y) => {
+      if (isGroundFloor(get().activeFloor())) return
+      if (get().tool !== 'floor') return
+      set({
+        floorPlateDraft: { x0: x, y0: y, x1: x, y1: y },
+        statusMessage: null,
+      })
+    },
+
+    updateFloorPlateDraft: (x, y) => {
+      const draft = get().floorPlateDraft
+      if (!draft) return
+      set({ floorPlateDraft: { ...draft, x1: x, y1: y } })
+    },
+
+    finishFloorPlate: () => {
+      const draft = get().floorPlateDraft
+      if (!draft) return
+      const plate = createFloorPlateFromDrag(
+        draft.x0,
+        draft.y0,
+        draft.x1,
+        draft.y1,
+      )
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const next: Floor = {
+        ...floor,
+        plates: [...(floor.plates ?? []), plate],
+      }
+      set({
+        building: replaceFloor(get().building, next),
+        floorPlateDraft: null,
+        selection: { kind: 'floorPlate', id: plate.id },
+        statusMessage: null,
+      })
+    },
+
+    cancelFloorPlateDraft: () => set({ floorPlateDraft: null }),
+
+    updateFloorPlate: (id, patch) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const next = updateFloorPlateFields(floor, id, patch)
+      set({ building: replaceFloor(get().building, next) })
+    },
+
+    dragFloorPlate: (id, x, y) => {
+      const floor = get().activeFloor()
+      const next = updateFloorPlateFields(floor, id, { x, y })
+      set({
+        building: replaceFloor(get().building, next),
+        selection: { kind: 'floorPlate', id },
+      })
+    },
+
+    setFloorPlateMaterial: (id, material) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const next = applyFloorPlateMaterial(floor, id, material)
+      set({ building: replaceFloor(get().building, next) })
+    },
+
+    selectFloorPlate: (floorId, id) => {
+      const floor = get().building.floors.find((f) => f.id === floorId)
+      if (!floor?.plates?.some((p) => p.id === id)) return
+      set({
+        activeFloorId: floorId,
+        selection: { kind: 'floorPlate', id },
+        wallDraftFrom: null,
+        openingDraft: null,
+        slabOpeningDraft: null,
+        floorPlateDraft: null,
+      })
+    },
 
     updateSlabOpening: (id, patch) => {
       get().pushHistory()
@@ -853,13 +1035,41 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     },
 
     setModelBrowserOpen: (modelBrowserOpen) => set({ modelBrowserOpen }),
+    setCollectionBrowserOpen: (collectionBrowserOpen) =>
+      set({ collectionBrowserOpen }),
     setLibraryTokensOpen: (libraryTokensOpen) => set({ libraryTokensOpen }),
+    setTransformGizmoMode: (transformGizmoMode) => set({ transformGizmoMode }),
+    cycleTransformGizmoMode: () => {
+      const order: TransformGizmoMode[] = ['translate', 'rotate', 'scale']
+      const labels = {
+        translate: 'Перемещение',
+        rotate: 'Вращение',
+        scale: 'Масштаб',
+      } as const
+      const cur = get().transformGizmoMode
+      const next = order[(order.indexOf(cur) + 1) % order.length]!
+      set({
+        transformGizmoMode: next,
+        statusMessage: `Gizmo: ${labels[next]}`,
+      })
+    },
+    setTransformDragging: (transformDragging) => set({ transformDragging }),
+    setObjectSnapEnabled: (objectSnapEnabled) => set({ objectSnapEnabled }),
+    toggleObjectSnap: () =>
+      set((s) => ({
+        objectSnapEnabled: !s.objectSnapEnabled,
+        statusMessage: !s.objectSnapEnabled
+          ? 'Привязка к стенам и объектам включена'
+          : 'Привязка выключена',
+      })),
     setPendingModel: (pendingModel) =>
       set({
         pendingModel,
         workbench: pendingModel ? 'furnish' : get().workbench,
-        tool: pendingModel ? 'placeObject' : get().tool,
+        tool: pendingModel ? 'placeObject' : 'select',
+        viewMode: pendingModel ? '3d' : get().viewMode,
         modelBrowserOpen: false,
+        collectionBrowserOpen: false,
         sceneMode:
           pendingModel && get().sceneMode === 'paint'
             ? 'interior'
@@ -873,8 +1083,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       const pending = get().pendingModel
       if (!pending) {
         set({
-          statusMessage: 'Сначала выберите модель в каталоге',
-          modelBrowserOpen: true,
+          statusMessage: 'Сначала выберите модель в коллекции слева',
         })
         return
       }
@@ -884,14 +1093,51 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       }
       get().pushHistory()
       const floor = get().activeFloor()
+      const s = pending.scale ?? 1
+      const sizeX = pending.sizeX ?? 1
+      const sizeY = pending.sizeY ?? 1
+      const sizeZ = pending.sizeZ ?? 1
+      let px = x
+      let py = y
+      if (get().objectSnapEnabled) {
+        const sn = snapObjectXY(floor, px, py, {
+          halfSize: {
+            x: Math.max(0.05, (sizeX * s) / 2),
+            y: Math.max(0.05, (sizeZ * s) / 2),
+          },
+        })
+        px = sn.snappedX ? sn.x : snapToGrid(sn.x)
+        py = sn.snappedY ? sn.y : snapToGrid(sn.y)
+      } else {
+        px = snapToGrid(px)
+        py = snapToGrid(py)
+      }
+      const estimated = estimatePlanHalf({
+        sizeX,
+        sizeZ,
+        scaleX: s,
+        scaleZ: s,
+        rotationY: 0,
+      })
       const obj: PlacedObject = {
         id: createId('obj'),
         model: pending.model,
-        x: snapToGrid(x),
-        y: snapToGrid(y),
+        x: px,
+        y: py,
+        elevation: 0,
+        rotationX: 0,
         rotationY: 0,
-        scale: 1,
+        rotationZ: 0,
+        scaleX: s,
+        scaleY: s,
+        scaleZ: s,
+        sizeX,
+        sizeY,
+        sizeZ,
+        planHalfX: estimated.x,
+        planHalfY: estimated.y,
         attribution: pending.attribution,
+        appearance: pending.appearance,
       }
       const next: Floor = {
         ...floor,
@@ -900,6 +1146,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       set({
         building: replaceFloor(get().building, next),
         selection: { kind: 'object', id: obj.id },
+        transformGizmoMode: 'translate',
         statusMessage: 'Объект размещён',
       })
     },
@@ -909,19 +1156,49 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       const floor = get().activeFloor()
       const next: Floor = {
         ...floor,
-        objects: (floor.objects ?? []).map((o) =>
-          o.id === id ? { ...o, ...patch } : o,
-        ),
+        objects: (floor.objects ?? []).map((o) => {
+          if (o.id !== id) return o
+          const merged = { ...o, ...patch }
+          const touchesFootprint =
+            patch.scaleX != null ||
+            patch.scaleY != null ||
+            patch.scaleZ != null ||
+            patch.rotationX != null ||
+            patch.rotationY != null ||
+            patch.rotationZ != null ||
+            patch.sizeX != null ||
+            patch.sizeY != null ||
+            patch.sizeZ != null
+          const hasMeasuredAabb =
+            patch.planHalfX != null || patch.planHalfY != null
+          if (touchesFootprint && !hasMeasuredAabb) {
+            const h = estimatePlanHalf(merged)
+            merged.planHalfX = h.x
+            merged.planHalfY = h.y
+          }
+          return merged
+        }),
       }
       set({ building: replaceFloor(get().building, next) })
     },
 
     dragPlacedObject: (id, x, y) => {
       const floor = get().activeFloor()
+      let px = x
+      let py = y
+      if (get().objectSnapEnabled) {
+        const moving = (floor.objects ?? []).find((o) => o.id === id)
+        const sn = snapObjectXY(floor, px, py, {
+          excludeObjectId: id,
+          halfSize: moving ? planHalfSizeOf(moving) : undefined,
+        })
+        px = sn.x
+        py = sn.y
+      }
       const next: Floor = {
         ...floor,
         objects: (floor.objects ?? []).map((o) =>
-          o.id === id ? { ...o, x, y } : o,
+          o.id === id ? { ...o, x: px, y: py } : o,
         ),
       }
       set({
@@ -930,15 +1207,26 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       })
     },
 
-    selectObject: (floorId, id) =>
+    selectObject: (floorId, id) => {
+      const prev = get().selection
+      const same = prev?.kind === 'object' && prev.id === id
       set({
         activeFloorId: floorId,
         selection: { kind: 'object', id },
         wallDraftFrom: null,
         openingDraft: null,
         slabOpeningDraft: null,
+        floorPlateDraft: null,
+        // Stop placement mode so gizmo / LMB work on the object
+        pendingModel: null,
+        tool: 'select',
+        workbench: 'furnish',
+        viewMode: '3d',
         statusMessage: null,
-      }),
+        // New selection → drag = move; double-click later cycles mode
+        ...(same ? {} : { transformGizmoMode: 'translate' as const }),
+      })
+    },
 
     updateOpening: (id, patch) => {
       get().pushHistory()
@@ -981,9 +1269,12 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         set({ selection: { kind: 'vertex', id: vertex.id } })
         return
       }
-      const obj = (floor.objects ?? []).find(
-        (o) => Math.hypot(o.x - x, o.y - y) <= 0.35,
-      )
+      const obj = (floor.objects ?? []).find((o) => {
+        const half = planHalfSizeOf(o)
+        return (
+          Math.abs(o.x - x) <= half.x && Math.abs(o.y - y) <= half.y
+        )
+      })
       if (obj) {
         set({ selection: { kind: 'object', id: obj.id } })
         return
@@ -991,6 +1282,11 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       const slab = hitSlabOpening(floor, x, y)
       if (slab) {
         set({ selection: { kind: 'slabOpening', id: slab.id } })
+        return
+      }
+      const plate = hitFloorPlate(floor, x, y)
+      if (plate) {
+        set({ selection: { kind: 'floorPlate', id: plate.id } })
         return
       }
       const opening = hitOpening(floor, x, y)
@@ -1299,6 +1595,12 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     setRoomFloorMaterial: (roomKey, material) => {
       get().pushHistory()
       const floor = get().activeFloor()
+      const plateId = floorPlateIdFromKey(roomKey)
+      if (plateId) {
+        const next = applyFloorPlateMaterial(floor, plateId, material)
+        set({ building: replaceFloor(get().building, next) })
+        return
+      }
       const map = { ...(floor.roomFloorMaterials ?? {}) }
       if (material == null) {
         delete map[roomKey]
@@ -1718,6 +2020,11 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
             (o) => o.id !== selection.id,
           ),
         }
+      } else if (selection.kind === 'floorPlate') {
+        floor = {
+          ...floor,
+          plates: (floor.plates ?? []).filter((p) => p.id !== selection.id),
+        }
       } else if (selection.kind === 'object') {
         floor = {
           ...floor,
@@ -1797,6 +2104,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         conflict: false,
         openingDraft: null,
         slabOpeningDraft: null,
+        floorPlateDraft: null,
         statusMessage: 'Проект загружен',
       })
       return true
@@ -1804,9 +2112,16 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
 
     exportJson: () => JSON.stringify(get().building, null, 2),
 
-    importJson: (json) => {
+    exportProjectPackage: async () => {
+      const pkg = await buildProjectPackage(get().building)
+      return JSON.stringify(pkg, null, 2)
+    },
+
+    importJson: async (json) => {
       try {
-        const data = ensureBuildingOpenings(JSON.parse(json) as Building)
+        const { building: raw, package: pkg } = parseImportJson(json)
+        if (pkg) await applyProjectPackage(pkg)
+        const data = ensureBuildingOpenings(raw)
         if (!data.floors?.length) throw new Error('invalid')
         get().pushHistory()
         set({
@@ -1817,7 +2132,10 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
           conflict: false,
           openingDraft: null,
           slabOpeningDraft: null,
-          statusMessage: 'Проект загружен',
+          floorPlateDraft: null,
+          statusMessage: pkg
+            ? 'Проект и кеш объектов загружены'
+            : 'Проект загружен',
         })
         return true
       } catch {
@@ -1855,6 +2173,7 @@ function seedDemoFloor(floor: Floor): Floor {
     walls: [w1, w2, w3, w4],
     openings: [],
     slabOpenings: [],
+    plates: [],
     objects: [],
     constraints: [
       { id: createId('c'), type: 'fixedLength', wallId: w1.id, length: 6 },

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import {
+  CONSTRAINT_ICONS,
   hasAxisConstraint,
   hasFixedLength,
   hasFixedPosition,
@@ -57,11 +58,18 @@ export function PropertiesPanel() {
   const updateOpening = useBuildingStore((s) => s.updateOpening)
   const updateSlabOpening = useBuildingStore((s) => s.updateSlabOpening)
   const setSlabOpeningMaterial = useBuildingStore((s) => s.setSlabOpeningMaterial)
+  const updateFloorPlate = useBuildingStore((s) => s.updateFloorPlate)
+  const setFloorPlateMaterial = useBuildingStore((s) => s.setFloorPlateMaterial)
   const updatePlacedObject = useBuildingStore((s) => s.updatePlacedObject)
   const copyFromPreviousFloor = useBuildingStore((s) => s.copyFromPreviousFloor)
   const conflict = useBuildingStore((s) => s.conflict)
   const statusMessage = useBuildingStore((s) => s.statusMessage)
+  const workbench = useBuildingStore((s) => s.workbench)
   const [showCopyFromPrev, setShowCopyFromPrev] = useState(false)
+
+  const isDraft = workbench === 'draft'
+  const isPaint = workbench === 'paint'
+  const isFurnish = workbench === 'furnish'
 
   const stories = building.floors.filter(isStoryFloor)
   const ground = building.floors.find(isGroundFloor)
@@ -87,6 +95,10 @@ export function PropertiesPanel() {
   const slabOpening =
     selection?.kind === 'slabOpening'
       ? (floor.slabOpenings ?? []).find((o) => o.id === selection.id)
+      : null
+  const floorPlate =
+    selection?.kind === 'floorPlate'
+      ? (floor.plates ?? []).find((p) => p.id === selection.id)
       : null
   const placedObject =
     selection?.kind === 'object'
@@ -181,7 +193,9 @@ export function PropertiesPanel() {
 
   return (
     <aside className="properties">
-      <h2 className="panel-title">Свойства</h2>
+      <h2 className="panel-title">
+        {isPaint ? 'Текстуры' : isFurnish ? 'Объект' : 'Свойства'}
+      </h2>
 
       {(conflict || statusMessage) && (
         <div className={`status ${conflict ? 'conflict' : ''}`}>
@@ -189,6 +203,7 @@ export function PropertiesPanel() {
         </div>
       )}
 
+      {isDraft && (
       <section className="prop-section">
         <label>
           Проект
@@ -302,10 +317,26 @@ export function PropertiesPanel() {
           </>
         )}
       </section>
+      )}
 
-      {!isGround && (
+      {isDraft && !isGround && <ConstraintsList />}
+
+      {isPaint && (
+        <p className="hint">
+          Палитра слева · ЛКМ — нанести · Alt — стереть · Shift+пол — стены
+          комнаты. Слоты ниже — для выделенной поверхности.
+        </p>
+      )}
+
+      {isFurnish && !placedObject && (
+        <p className="muted">
+          Выберите объект на плане или в 3D, либо поставьте новый из каталога.
+        </p>
+      )}
+
+      {!isGround && (isDraft || isPaint || isFurnish) && (
         <>
-      {slabOpening && (
+      {isDraft && slabOpening && (
         <section className="prop-section">
           <h3>{slabOpeningKindLabel(slabOpening.kind)}</h3>
           <p className="muted">Прямоугольный вырез в плите пола</p>
@@ -361,6 +392,12 @@ export function PropertiesPanel() {
               }
             />
           </label>
+        </section>
+      )}
+
+      {isPaint && slabOpening && (
+        <section className="prop-section">
+          <h3>{slabOpeningKindLabel(slabOpening.kind)}</h3>
           <MaterialSlot
             label="Срезы (стенки выреза)"
             value={slabOpening.material}
@@ -370,7 +407,78 @@ export function PropertiesPanel() {
         </section>
       )}
 
-      {placedObject && (
+      {isDraft && floorPlate && (
+        <section className="prop-section">
+          <h3>Пол без стен</h3>
+          <p className="muted">Прямоугольная плита пола без контура стен</p>
+          <label>
+            Ширина (X), м
+            <input
+              type="number"
+              min={0.5}
+              max={50}
+              step={0.05}
+              value={floorPlate.width}
+              onChange={(e) =>
+                updateFloorPlate(floorPlate.id, {
+                  width: Number(e.target.value),
+                })
+              }
+            />
+          </label>
+          <label>
+            Глубина (Y), м
+            <input
+              type="number"
+              min={0.5}
+              max={50}
+              step={0.05}
+              value={floorPlate.depth}
+              onChange={(e) =>
+                updateFloorPlate(floorPlate.id, {
+                  depth: Number(e.target.value),
+                })
+              }
+            />
+          </label>
+          <label>
+            Центр X, м
+            <input
+              type="number"
+              step={0.05}
+              value={floorPlate.x}
+              onChange={(e) =>
+                updateFloorPlate(floorPlate.id, { x: Number(e.target.value) })
+              }
+            />
+          </label>
+          <label>
+            Центр Y, м
+            <input
+              type="number"
+              step={0.05}
+              value={floorPlate.y}
+              onChange={(e) =>
+                updateFloorPlate(floorPlate.id, { y: Number(e.target.value) })
+              }
+            />
+          </label>
+        </section>
+      )}
+
+      {isPaint && floorPlate && (
+        <section className="prop-section">
+          <h3>Пол без стен</h3>
+          <MaterialSlot
+            label="Покрытие пола"
+            value={floorPlate.material}
+            onChange={(ref) => setFloorPlateMaterial(floorPlate.id, ref)}
+            onClear={() => setFloorPlateMaterial(floorPlate.id, null)}
+          />
+        </section>
+      )}
+
+      {isFurnish && placedObject && (
         <section className="prop-section">
           <h3>3D объект</h3>
           <p className="muted">
@@ -416,7 +524,21 @@ export function PropertiesPanel() {
             />
           </label>
           <label>
-            Поворот, °
+            Высота над полом, м
+            <input
+              type="number"
+              step={0.05}
+              min={0}
+              value={placedObject.elevation}
+              onChange={(e) =>
+                updatePlacedObject(placedObject.id, {
+                  elevation: Math.max(0, Number(e.target.value)),
+                })
+              }
+            />
+          </label>
+          <label>
+            Поворот Y, °
             <input
               type="number"
               step={5}
@@ -429,24 +551,58 @@ export function PropertiesPanel() {
             />
           </label>
           <label>
-            Масштаб
+            Масштаб X
             <input
               type="number"
               min={0.05}
               max={20}
               step={0.05}
-              value={placedObject.scale}
+              value={placedObject.scaleX}
               onChange={(e) =>
                 updatePlacedObject(placedObject.id, {
-                  scale: Number(e.target.value),
+                  scaleX: Number(e.target.value),
                 })
               }
             />
           </label>
+          <label>
+            Масштаб Y
+            <input
+              type="number"
+              min={0.05}
+              max={20}
+              step={0.05}
+              value={placedObject.scaleY}
+              onChange={(e) =>
+                updatePlacedObject(placedObject.id, {
+                  scaleY: Number(e.target.value),
+                })
+              }
+            />
+          </label>
+          <label>
+            Масштаб Z
+            <input
+              type="number"
+              min={0.05}
+              max={20}
+              step={0.05}
+              value={placedObject.scaleZ}
+              onChange={(e) =>
+                updatePlacedObject(placedObject.id, {
+                  scaleZ: Number(e.target.value),
+                })
+              }
+            />
+          </label>
+          <p className="muted">
+            Drag — перемещение. Двойной клик по объекту — смена режима gizmo
+            (двигать / вращать / масштаб).
+          </p>
         </section>
       )}
 
-      {opening && (
+      {isDraft && opening && (
         <section className="prop-section">
           <h3>{openingKindLabel(opening.kind)}</h3>
           <label>
@@ -518,7 +674,7 @@ export function PropertiesPanel() {
         </section>
       )}
 
-      {wall && (
+      {isDraft && wall && (
         <section className="prop-section">
           <h3>Стена</h3>
           <p className="muted">Длина: {wallLength(floor, wall).toFixed(2)} м</p>
@@ -540,7 +696,7 @@ export function PropertiesPanel() {
               onChange={() => toggleFixedLength(wall.id)}
             />
             <img
-              src="/icons/constraints/distance-constraint.svg"
+              src={CONSTRAINT_ICONS.fixedLength}
               alt=""
               width={16}
               height={16}
@@ -573,7 +729,7 @@ export function PropertiesPanel() {
               onChange={() => toggleAxis(wall.id, 'horizontal')}
             />
             <img
-              src="/icons/constraints/horizontal-constraint.svg"
+              src={CONSTRAINT_ICONS.horizontal}
               alt=""
               width={16}
               height={16}
@@ -587,13 +743,19 @@ export function PropertiesPanel() {
               onChange={() => toggleAxis(wall.id, 'vertical')}
             />
             <img
-              src="/icons/constraints/vertical-constraint.svg"
+              src={CONSTRAINT_ICONS.vertical}
               alt=""
               width={16}
               height={16}
             />
             Вертикальная
           </label>
+        </section>
+      )}
+
+      {isPaint && wall && (
+        <section className="prop-section">
+          <h3>Стена</h3>
           <MaterialSlot
             label="Обе стороны"
             value={
@@ -636,7 +798,7 @@ export function PropertiesPanel() {
         </section>
       )}
 
-      {room && (
+      {isPaint && room && (
         <section className="prop-section">
           <h3>Комната</h3>
           <p className="muted">Стен в контуре: {room.wallIds.length}</p>
@@ -660,7 +822,17 @@ export function PropertiesPanel() {
         </section>
       )}
 
-      {vertex && (
+      {isDraft && room && (
+        <section className="prop-section">
+          <h3>Комната</h3>
+          <p className="muted">
+            Стен в контуре: {room.wallIds.length}. Текстуры — в верстаке
+            «Покраска».
+          </p>
+        </section>
+      )}
+
+      {isDraft && vertex && (
         <section className="prop-section">
           <h3>Вершина</h3>
           <p className="muted">
@@ -673,7 +845,7 @@ export function PropertiesPanel() {
               onChange={() => toggleFixedPosition(vertex.id)}
             />
             <img
-              src="/icons/constraints/lock-constraint.svg"
+              src={CONSTRAINT_ICONS.fixedPosition}
               alt=""
               width={16}
               height={16}
@@ -683,7 +855,7 @@ export function PropertiesPanel() {
         </section>
       )}
 
-      {multi && (
+      {isDraft && multi && (
         <section className="prop-section">
           <h3>Выделение</h3>
           <p className="muted">
@@ -701,7 +873,7 @@ export function PropertiesPanel() {
         </section>
       )}
 
-      {pointOnWallPair && (
+      {isDraft && pointOnWallPair && (
         <section className="prop-section">
           <h3>Точка на стене</h3>
           {pointOnWallPair.isEndpoint ? (
@@ -727,7 +899,7 @@ export function PropertiesPanel() {
                   }}
                 />
                 <img
-                  src="/icons/constraints/point-on-line-constraint.svg"
+                  src={CONSTRAINT_ICONS.pointOnWall}
                   alt=""
                   width={16}
                   height={16}
@@ -742,7 +914,7 @@ export function PropertiesPanel() {
         </section>
       )}
 
-      {pointsAlign && (
+      {isDraft && pointsAlign && (
         <section className="prop-section">
           <h3>Выравнивание точек</h3>
           <label className="check">
@@ -758,7 +930,7 @@ export function PropertiesPanel() {
               }}
             />
             <img
-              src="/icons/constraints/horizontal-constraint.svg"
+              src={CONSTRAINT_ICONS.horizontal}
               alt=""
               width={16}
               height={16}
@@ -778,7 +950,7 @@ export function PropertiesPanel() {
               }}
             />
             <img
-              src="/icons/constraints/vertical-constraint.svg"
+              src={CONSTRAINT_ICONS.vertical}
               alt=""
               width={16}
               height={16}
@@ -788,7 +960,7 @@ export function PropertiesPanel() {
         </section>
       )}
 
-      {vertexDistancePair && (
+      {isDraft && vertexDistancePair && (
         <section className="prop-section">
           <h3>Расстояние между вершинами</h3>
           <p className="muted">
@@ -876,7 +1048,7 @@ export function PropertiesPanel() {
         </section>
       )}
 
-      {distancePair && (
+      {isDraft && distancePair && (
         <section className="prop-section">
           <h3>Расстояние между стенами</h3>
           <p className="muted">
@@ -960,7 +1132,7 @@ export function PropertiesPanel() {
         </section>
       )}
 
-      {wallIds.length === 2 && !distancePair && (
+      {isDraft && wallIds.length === 2 && !distancePair && (
         <section className="prop-section">
           <p className="muted">
             Для расстояния обе стены должны быть горизонтальными или обе
@@ -969,23 +1141,22 @@ export function PropertiesPanel() {
         </section>
       )}
 
-      {!wall &&
+      {isDraft &&
+        !wall &&
         !vertex &&
         !multi &&
         !opening &&
         !slabOpening &&
-        !placedObject &&
+        !floorPlate &&
         !distancePair &&
         !pointsAlign &&
         !vertexDistancePair &&
         !pointOnWallPair && (
         <p className="muted">
-          Выберите стену, вершину, проём или 3D-объект. Инструмент «Модель» (F) —
-          каталог. Shift+клик — несколько.
+          Выберите стену, вершину, проём или пол. Инструмент «Пол» (B) — плита
+          без стен. Shift+клик — несколько.
         </p>
       )}
-
-      <ConstraintsList />
         </>
       )}
     </aside>

@@ -2,6 +2,7 @@ import {
   createId,
   type Constraint,
   type Floor,
+  type FloorPlate,
   type Opening,
   type OpeningKind,
   type SlabOpening,
@@ -16,6 +17,7 @@ export interface CopyFloorOptions {
   windows: boolean
   passages: boolean
   stairs: boolean
+  plates: boolean
 }
 
 export const DEFAULT_COPY_FLOOR_OPTIONS: CopyFloorOptions = {
@@ -25,6 +27,7 @@ export const DEFAULT_COPY_FLOOR_OPTIONS: CopyFloorOptions = {
   windows: true,
   passages: true,
   stairs: true,
+  plates: true,
 }
 
 function openingKindSelected(
@@ -116,7 +119,7 @@ export function copyFloorNeedsWalls(options: CopyFloorOptions): boolean {
  * Keeps target id/name/elevation/height.
  * Walls (vertices+walls) are copied whenever wall openings or constraints are
  * selected, since those depend on remapped wall/vertex IDs.
- * Stair slab openings copy independently of walls.
+ * Stair slab openings and free floor plates copy independently of walls.
  */
 export function applyFloorCopy(
   target: Floor,
@@ -134,10 +137,18 @@ export function applyFloorCopy(
       }))
     : []
 
+  const plates: FloorPlate[] = options.plates
+    ? (source.plates ?? []).map((p) => ({
+        ...p,
+        id: createId('plt'),
+      }))
+    : []
+
   if (!copyWalls) {
     return {
       ...target,
       slabOpenings: options.stairs ? slabOpenings : (target.slabOpenings ?? []),
+      plates: options.plates ? plates : (target.plates ?? []),
     }
   }
 
@@ -184,5 +195,6 @@ export function applyFloorCopy(
     constraints,
     openings,
     slabOpenings: options.stairs ? slabOpenings : [],
+    plates: options.plates ? plates : [],
   }
 }

@@ -4,7 +4,9 @@ import type { Floor, Wall, WallSide } from '../types'
 import { wallFaceEndpoints, wallAxes } from './wallSolid'
 import { openingsForWall, openingSpan } from './openings'
 
-const FACE_OUTSET = 0.025
+export const WALL_FINISH_OUTSET = 0.025
+/** @deprecated use WALL_FINISH_OUTSET */
+const FACE_OUTSET = WALL_FINISH_OUTSET
 /** Wall paint hit starts above the slab so floor pick owns near-wall clicks. */
 const WALL_PAINT_Y0 = 0.22
 

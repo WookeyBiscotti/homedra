@@ -6,6 +6,7 @@ import {
   floorPaintRegions,
   hitFloorPaintRegion,
 } from '../../engine/geometry/floorPaint'
+import { resolveFloorRegionMaterial } from '../../engine/geometry/floorPlates'
 import { floorSlabOpeningHoles } from '../../engine/geometry/slabOpenings'
 import {
   buildRoomFloorGeometry,
@@ -160,7 +161,14 @@ function PaintFloorRegion({
       onClick={(e: ThreeEvent<MouseEvent>) => {
         e.stopPropagation()
         setActiveFloor(floorId)
-        setSelection({ kind: 'room', key: regionKey })
+        const plateId = regionKey.startsWith('plate:')
+          ? regionKey.slice('plate:'.length)
+          : null
+        if (plateId) {
+          setSelection({ kind: 'floorPlate', id: plateId })
+        } else {
+          setSelection({ kind: 'room', key: regionKey })
+        }
         if (!paintBrush && !e.altKey) return
         const next = e.altKey ? null : paintBrush
         setRoomFloorMaterial(regionKey, next)
@@ -403,7 +411,7 @@ export function PaintPickables({ floorId }: { floorId: string }) {
       out.push({
         key: r.key,
         geo,
-        hasFinish: !!floor.roomFloorMaterials?.[r.key],
+        hasFinish: !!resolveFloorRegionMaterial(floor, r.key),
       })
     }
     return out

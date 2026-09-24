@@ -5,6 +5,7 @@ import {
   type DetectedRoom,
 } from './wallSolid'
 import { inflatePolygonOutward } from './wallFaces'
+import { floorPlateKey, floorPlateRect } from './floorPlates'
 
 export type FloorPaintRegion = {
   key: string
@@ -64,7 +65,8 @@ function pointInPoly(
 
 /**
  * Paintable floor regions: prefer detected rooms; also include wall-union
- * interior holes that didn't become rooms (so every enclosed floor area works).
+ * interior holes that didn't become rooms (so every enclosed floor area works),
+ * plus free floor plates (no walls).
  */
 export function floorPaintRegions(floor: Floor): FloorPaintRegion[] {
   const rooms = detectRooms(floor)
@@ -95,6 +97,18 @@ export function floorPaintRegions(floor: Floor): FloorPaintRegion[] {
         room,
       })
     }
+  }
+
+  for (const plate of floor.plates ?? []) {
+    const polygon = orientPolygonCCW(floorPlateRect(plate))
+    if (polygon.length < 3) continue
+    const c = centroid(polygon)
+    if (covered(c.x, c.y)) continue
+    out.push({
+      key: floorPlateKey(plate.id),
+      polygon,
+      room: null,
+    })
   }
 
   // Smallest first for hit-tests

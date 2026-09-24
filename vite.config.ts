@@ -8,6 +8,8 @@ import { apiProxies, assetProxyPlugin } from './vite.proxy.ts'
 const root = path.dirname(fileURLToPath(import.meta.url))
 
 export default defineConfig({
+  // GitHub Pages project site: set BASE_PATH=/homedra/ in CI
+  base: process.env.BASE_PATH || '/',
   plugins: [react(), assetProxyPlugin()],
   resolve: {
     alias: {

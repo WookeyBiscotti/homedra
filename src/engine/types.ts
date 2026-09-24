@@ -117,6 +117,22 @@ export interface SlabOpening {
   material?: MaterialRef | null
 }
 
+/**
+ * Free rectangular floor plate (slab region without walls).
+ * Axis-aligned in plan; extruded with the story's slab thickness.
+ */
+export interface FloorPlate {
+  id: Id
+  /** Center X in plan, meters */
+  x: number
+  /** Center Y in plan, meters */
+  y: number
+  width: number
+  depth: number
+  /** Top-surface finish (paint / properties). */
+  material?: MaterialRef | null
+}
+
 /** Terrain level vs. a normal story with walls/slab. */
 export type FloorKind = 'ground' | 'story'
 
@@ -142,6 +158,8 @@ export interface Floor {
   constraints: Constraint[]
   openings: Opening[]
   slabOpenings: SlabOpening[]
+  /** Free floor plates (slab without walls). */
+  plates?: FloorPlate[]
   /** Room key (closed wall cycle) → floor finish. */
   roomFloorMaterials?: Record<string, MaterialRef>
   /** Placed 3D objects (furniture / props) on this floor. */
@@ -170,6 +188,31 @@ export interface ModelAttribution {
   url?: string
 }
 
+/** Per-material paint / texture / PBR override (mirrors collection appearance). */
+export type ObjectMaterialOverride = {
+  /** Multiply tint on albedo (`#rrggbb`). */
+  tint?: string
+  /** Replace maps with ambientCG material. */
+  material?: MaterialRef | null
+  /** 0…1 scalar (multiplies roughnessMap when present). */
+  roughness?: number
+  /** 0…1 scalar (multiplies metalnessMap when present). */
+  metalness?: number
+  emissive?: string
+  emissiveIntensity?: number
+  /** 0…1; enables transparency when < 1. */
+  opacity?: number
+  envMapIntensity?: number
+  /** Uniform normal map strength. */
+  normalScale?: number
+  aoMapIntensity?: number
+}
+
+/** Visual overrides applied when rendering a placed GLB. */
+export type ObjectAppearance = ObjectMaterialOverride & {
+  slots?: Record<string, ObjectMaterialOverride>
+}
+
 /** Instance of a 3D model on a floor (plan XZ → world XZ, Y up). */
 export interface PlacedObject {
   id: Id
@@ -178,12 +221,95 @@ export interface PlacedObject {
   x: number
   /** Plan Y → world Z (meters) */
   y: number
-  /** Rotation around world Y, radians */
+  /** Height above floor slab (meters) */
+  elevation: number
+  /** Euler rotation, radians */
+  rotationX: number
   rotationY: number
-  /** Uniform scale */
-  scale: number
+  rotationZ: number
+  /** Non-uniform scale */
+  scaleX: number
+  scaleY: number
+  scaleZ: number
+  /**
+   * Local model bbox size (meters) before instance scale.
+   * Used for AABB snap / flush. From collection calibration.
+   */
+  sizeX: number
+  sizeY: number
+  sizeZ: number
+  /**
+   * Measured plan AABB half-extents (meters), same as 3D world AABB on XZ.
+   * planHalfY corresponds to world |Z| extent. Source of truth for 2D draw.
+   */
+  planHalfX: number
+  planHalfY: number
   attribution?: ModelAttribution
+  /** Paint / texture overrides from collection or per-instance edit. */
+  appearance?: ObjectAppearance
 }
+
+/** Plan AABB half-extents from local size × scale × yaw (estimate). */
+export function estimatePlanHalf(o: {
+  sizeX: number
+  sizeZ: number
+  scaleX: number
+  scaleZ: number
+  rotationY: number
+}): { x: number; y: number } {
+  const hx = Math.max(0.05, (Math.abs(o.sizeX) * Math.abs(o.scaleX)) / 2)
+  const hz = Math.max(0.05, (Math.abs(o.sizeZ) * Math.abs(o.scaleZ)) / 2)
+  const c = Math.cos(o.rotationY)
+  const s = Math.sin(o.rotationY)
+  return {
+    x: Math.abs(hx * c) + Math.abs(hz * s),
+    y: Math.abs(hx * s) + Math.abs(hz * c),
+  }
+}
+
+/** Normalize legacy placed objects (uniform `scale`, missing elevation/axes). */
+export function normalizePlacedObject(
+  raw: PlacedObject | (Partial<PlacedObject> & { scale?: number }),
+): PlacedObject {
+  const legacy = (raw as { scale?: number }).scale
+  const s = raw.scaleX ?? legacy ?? 1
+  const sizeX = raw.sizeX ?? 1
+  const sizeY = raw.sizeY ?? 1
+  const sizeZ = raw.sizeZ ?? 1
+  const scaleX = raw.scaleX ?? s
+  const scaleY = raw.scaleY ?? s
+  const scaleZ = raw.scaleZ ?? s
+  const rotationY = raw.rotationY ?? 0
+  const estimated = estimatePlanHalf({
+    sizeX,
+    sizeZ,
+    scaleX,
+    scaleZ,
+    rotationY,
+  })
+  return {
+    id: raw.id!,
+    model: raw.model!,
+    x: raw.x ?? 0,
+    y: raw.y ?? 0,
+    elevation: raw.elevation ?? 0,
+    rotationX: raw.rotationX ?? 0,
+    rotationY,
+    rotationZ: raw.rotationZ ?? 0,
+    scaleX,
+    scaleY,
+    scaleZ,
+    sizeX,
+    sizeY,
+    sizeZ,
+    planHalfX: raw.planHalfX ?? estimated.x,
+    planHalfY: raw.planHalfY ?? estimated.y,
+    attribution: raw.attribution,
+    appearance: raw.appearance,
+  }
+}
+
+export type TransformGizmoMode = 'translate' | 'rotate' | 'scale'
 
 export interface Building {
   id: Id
@@ -199,6 +325,7 @@ export type Tool =
   | 'passage'
   | 'window'
   | 'stair'
+  | 'floor'
   | 'placeObject'
   | 'lockLength'
   | 'lockPoint'
@@ -224,6 +351,7 @@ export const DRAFT_TOOLS: readonly Tool[] = [
   'passage',
   'window',
   'stair',
+  'floor',
   'lockLength',
   'lockPoint',
   'horizontal',
@@ -302,6 +430,7 @@ export type Selection =
   | { kind: 'vertex'; id: Id }
   | { kind: 'opening'; id: Id }
   | { kind: 'slabOpening'; id: Id }
+  | { kind: 'floorPlate'; id: Id }
   | { kind: 'object'; id: Id }
   | { kind: 'room'; key: string }
   | { kind: 'multi'; vertexIds: Id[]; wallIds: Id[] }
@@ -319,6 +448,10 @@ export function isOpeningTool(tool: Tool): tool is OpeningKind {
 
 export function isStairTool(tool: Tool): boolean {
   return tool === 'stair'
+}
+
+export function isFloorPlateTool(tool: Tool): boolean {
+  return tool === 'floor'
 }
 
 export function openingKindLabel(kind: OpeningKind): string {
@@ -376,6 +509,10 @@ export function isSlabOpeningSelected(selection: Selection, id: Id): boolean {
   return selection?.kind === 'slabOpening' && selection.id === id
 }
 
+export function isFloorPlateSelected(selection: Selection, id: Id): boolean {
+  return selection?.kind === 'floorPlate' && selection.id === id
+}
+
 export function selectedOpeningId(selection: Selection): Id | null {
   return selection?.kind === 'opening' ? selection.id : null
 }
@@ -423,6 +560,7 @@ export function createEmptyFloor(
     constraints: [],
     openings: [],
     slabOpenings: [],
+    plates: [],
     objects: [],
   }
 }
@@ -563,7 +701,10 @@ export function ensureFloorOpenings(floor: Floor): Floor {
         : Math.max(0.05, Math.min(1, floor.slabThickness ?? 0.2)),
     openings: wallOpenings,
     slabOpenings: migratedSlabs,
-    objects: floor.objects ?? [],
+    plates: floor.plates ?? [],
+    objects: (floor.objects ?? []).map((o) =>
+      normalizePlacedObject(o as PlacedObject & { scale?: number }),
+    ),
   }
 }
 

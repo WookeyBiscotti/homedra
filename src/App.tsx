@@ -1,14 +1,18 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, type CSSProperties } from 'react'
 import { FloorTabs } from './components/FloorTabs'
 import { FloorPlanCanvas } from './components/Plan2D/FloorPlanCanvas'
 import { LibraryTokensSettings } from './components/LibraryTokensSettings'
 import { ModelBrowser } from './components/ModelBrowser'
+import { CollectionBrowser } from './components/CollectionBrowser'
+import { PanelResizeHandle } from './components/PanelResizeHandle'
 import { PropertiesPanel } from './components/PropertiesPanel'
 import { WorkbenchRail } from './components/WorkbenchRail'
 import { WorkbenchSwitcher } from './components/WorkbenchSwitcher'
 import { BuildingScene } from './components/View3D/BuildingScene'
 import type { Tool } from './engine/types'
 import { toolsForWorkbench } from './engine/types'
+import { UI_ICONS } from './components/icons'
+import { useResizablePanels } from './hooks/useResizablePanels'
 import { useBuildingStore } from './store/buildingStore'
 import './App.css'
 
@@ -19,6 +23,7 @@ const keyToTool: Record<string, Tool> = {
   o: 'passage',
   n: 'window',
   s: 'stair',
+  b: 'floor',
   f: 'placeObject',
   l: 'lockLength',
   p: 'lockPoint',
@@ -35,7 +40,7 @@ function TopBar() {
   const future = useBuildingStore((s) => s.future)
   const saveLocal = useBuildingStore((s) => s.saveLocal)
   const loadLocal = useBuildingStore((s) => s.loadLocal)
-  const exportJson = useBuildingStore((s) => s.exportJson)
+  const exportProjectPackage = useBuildingStore((s) => s.exportProjectPackage)
   const importJson = useBuildingStore((s) => s.importJson)
   const newProject = useBuildingStore((s) => s.newProject)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -54,7 +59,7 @@ function TopBar() {
           title="Отменить (Ctrl+Z)"
         >
           <img
-            src="/icons/ui/undo.svg"
+            src={UI_ICONS.undo}
             alt=""
             className="ui-icon"
             width={16}
@@ -71,7 +76,7 @@ function TopBar() {
           title="Повторить (Ctrl+Y)"
         >
           <img
-            src="/icons/ui/redo.svg"
+            src={UI_ICONS.redo}
             alt=""
             className="ui-icon"
             width={16}
@@ -113,13 +118,16 @@ function TopBar() {
         <button
           type="button"
           onClick={() => {
-            const blob = new Blob([exportJson()], { type: 'application/json' })
-            const url = URL.createObjectURL(blob)
-            const a = document.createElement('a')
-            a.href = url
-            a.download = 'building.json'
-            a.click()
-            URL.revokeObjectURL(url)
+            void (async () => {
+              const text = await exportProjectPackage()
+              const blob = new Blob([text], { type: 'application/json' })
+              const url = URL.createObjectURL(blob)
+              const a = document.createElement('a')
+              a.href = url
+              a.download = 'interior-project.json'
+              a.click()
+              URL.revokeObjectURL(url)
+            })()
           }}
         >
           Экспорт
@@ -136,7 +144,7 @@ function TopBar() {
             const file = e.target.files?.[0]
             if (!file) return
             const text = await file.text()
-            importJson(text)
+            await importJson(text)
             e.target.value = ''
           }}
         />
@@ -155,7 +163,10 @@ export default function App() {
   const cancelWallDraft = useBuildingStore((s) => s.cancelWallDraft)
   const cancelOpeningDraft = useBuildingStore((s) => s.cancelOpeningDraft)
   const cancelSlabOpeningDraft = useBuildingStore((s) => s.cancelSlabOpeningDraft)
+  const cancelFloorPlateDraft = useBuildingStore((s) => s.cancelFloorPlateDraft)
   const viewMode = useBuildingStore((s) => s.viewMode)
+  const setTransformGizmoMode = useBuildingStore((s) => s.setTransformGizmoMode)
+  const selection = useBuildingStore((s) => s.selection)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -183,11 +194,27 @@ export default function App() {
         cancelWallDraft()
         cancelOpeningDraft()
         cancelSlabOpeningDraft()
+        cancelFloorPlateDraft()
+        useBuildingStore.getState().setPendingModel(null)
+        setTool('select')
         return
       }
       if (key === 'm' && !mod && workbench === 'draft') {
         e.preventDefault()
         mergeSelectedVertices()
+        return
+      }
+      if (
+        !mod &&
+        workbench === 'furnish' &&
+        selection?.kind === 'object' &&
+        (key === 'g' || key === 'r' || key === 't')
+      ) {
+        e.preventDefault()
+        setTool('select')
+        setTransformGizmoMode(
+          key === 'g' ? 'translate' : key === 'r' ? 'rotate' : 'scale',
+        )
         return
       }
       if (!mod) {
@@ -216,19 +243,36 @@ export default function App() {
     cancelWallDraft,
     cancelOpeningDraft,
     cancelSlabOpeningDraft,
+    cancelFloorPlateDraft,
+    setTransformGizmoMode,
+    selection,
   ])
+
+  const { railWidth, propsWidth, resizeRail, resizeProps } =
+    useResizablePanels(workbench)
 
   return (
     <div className={`app-shell workbench-${workbench}`}>
       <TopBar />
-      <div className={`workspace workspace-${workbench}`}>
+      <div
+        className={`workspace workspace-${workbench}`}
+        style={
+          {
+            '--rail-width': `${railWidth}px`,
+            '--props-width': `${propsWidth}px`,
+          } as CSSProperties
+        }
+      >
         <WorkbenchRail />
+        <PanelResizeHandle side="left" onResize={resizeRail} />
         <main className="viewport">
           {viewMode === '2d' ? <FloorPlanCanvas /> : <BuildingScene />}
         </main>
+        <PanelResizeHandle side="right" onResize={resizeProps} />
         <PropertiesPanel />
       </div>
       <ModelBrowser />
+      <CollectionBrowser />
       <LibraryTokensSettings />
     </div>
   )

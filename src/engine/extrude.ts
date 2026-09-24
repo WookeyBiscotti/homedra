@@ -6,6 +6,7 @@ import {
   openingsActiveInBand,
 } from './geometry/openings'
 import { slabOpeningRect } from './geometry/slabOpenings'
+import { floorPlateRect } from './geometry/floorPlates'
 import {
   unionWallPlanRegions,
   type WallPlanRegion,
@@ -205,20 +206,14 @@ export function extrudeFloorWalls(floor: Floor): FloorWallSolid {
 
 /**
  * Floor slab footprints from the exterior outline of the wall union
- * (covers rooms and under walls). Stair wells are explicit Shape holes
+ * (covers rooms and under walls) plus free floor plates (no walls).
+ * Stair wells are explicit Shape holes
  * (more reliable than boolean difference for ExtrudeGeometry).
  */
 export function extrudeFloorSlabs(floor: Floor): FloorSlab {
   const thickness = Math.max(0.05, floor.slabThickness ?? 0.2)
   const wallRegions = unionWallPlanRegions(floor)
-  if (wallRegions.length === 0) {
-    return {
-      floorId: floor.id,
-      regions: [],
-      y: floor.elevation,
-      thickness,
-    }
-  }
+  const plates = floor.plates ?? []
 
   const stairs = (floor.slabOpenings ?? []).map((o) => ({
     x: o.x,
@@ -226,7 +221,9 @@ export function extrudeFloorSlabs(floor: Floor): FloorSlab {
     ring: slabOpeningRect(o),
   }))
 
-  const regions = wallRegions.map((r) => {
+  const regions: FloorSlab['regions'] = []
+
+  for (const r of wallRegions) {
     const outer = orientRing(r.outer, true)
     const holes: Array<Array<{ x: number; z: number }>> = []
     for (const stair of stairs) {
@@ -235,11 +232,27 @@ export function extrudeFloorSlabs(floor: Floor): FloorSlab {
         orientRing(stair.ring, false).map((p) => ({ x: p.x, z: p.y })),
       )
     }
-    return {
+    regions.push({
       outer: outer.map((p) => ({ x: p.x, z: p.y })),
       holes,
+    })
+  }
+
+  for (const plate of plates) {
+    const ring = floorPlateRect(plate)
+    const outer = orientRing(ring, true)
+    const holes: Array<Array<{ x: number; z: number }>> = []
+    for (const stair of stairs) {
+      if (!pointInRing(stair.x, stair.y, outer)) continue
+      holes.push(
+        orientRing(stair.ring, false).map((p) => ({ x: p.x, z: p.y })),
+      )
     }
-  })
+    regions.push({
+      outer: outer.map((p) => ({ x: p.x, z: p.y })),
+      holes,
+    })
+  }
 
   return {
     floorId: floor.id,
@@ -295,6 +308,15 @@ function floorFilledFootprintPolys(floor: Floor): Poly[] {
   for (const r of wallRegions) {
     if (r.outer.length < 3) continue
     const outer = orientRing(r.outer, true)
+    const ring: Ring = outer.map((p) => [p.x, p.y])
+    const f = ring[0]
+    const l = ring[ring.length - 1]
+    if (f && l && (f[0] !== l[0] || f[1] !== l[1])) ring.push([f[0], f[1]])
+    polys.push([ring])
+  }
+  for (const plate of floor.plates ?? []) {
+    const outer = orientRing(floorPlateRect(plate), true)
+    if (outer.length < 3) continue
     const ring: Ring = outer.map((p) => [p.x, p.y])
     const f = ring[0]
     const l = ring[ring.length - 1]
@@ -375,6 +397,14 @@ export function buildingBounds(building: Building): {
       maxX = Math.max(maxX, v.x)
       minZ = Math.min(minZ, v.y)
       maxZ = Math.max(maxZ, v.y)
+    }
+    for (const p of floor.plates ?? []) {
+      const hw = p.width / 2
+      const hd = p.depth / 2
+      minX = Math.min(minX, p.x - hw)
+      maxX = Math.max(maxX, p.x + hw)
+      minZ = Math.min(minZ, p.y - hd)
+      maxZ = Math.max(maxZ, p.y + hd)
     }
   }
 

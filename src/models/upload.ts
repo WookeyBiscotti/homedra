@@ -1,14 +1,20 @@
 import * as THREE from 'three'
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { createId } from '../engine/types'
+import {
+  getCachedAsset,
+  putCachedAsset,
+  type CachedAsset,
+} from './assetCache'
+import type { CollectionSource } from './collectionTypes'
+import { createGltfLoader } from './createGltfLoader'
 import {
   createLocalId,
   putLocalModel,
   type LocalModelRecord,
 } from './localStore'
+import { isGlbBuffer, MAX_BYTES } from './glbMagic'
 
-const MAX_BYTES = 50 * 1024 * 1024
-const GLB_MAGIC = 0x46546c67 // 'glTF'
+export { MAX_BYTES, isGlbBuffer } from './glbMagic'
 
 export class UploadValidationError extends Error {
   constructor(message: string) {
@@ -17,28 +23,11 @@ export class UploadValidationError extends Error {
   }
 }
 
-function readMagic(buf: ArrayBuffer): number {
-  if (buf.byteLength < 4) return 0
-  return new DataView(buf).getUint32(0, true)
-}
-
-function loadGltfFromBlob(blob: Blob): Promise<THREE.Group> {
-  const url = URL.createObjectURL(blob)
-  const loader = new GLTFLoader()
-  return new Promise((resolve, reject) => {
-    loader.load(
-      url,
-      (gltf) => {
-        URL.revokeObjectURL(url)
-        resolve(gltf.scene)
-      },
-      undefined,
-      (err) => {
-        URL.revokeObjectURL(url)
-        reject(err)
-      },
-    )
-  })
+export async function loadGltfFromBlob(blob: Blob): Promise<THREE.Group> {
+  const buf = await blob.arrayBuffer()
+  const loader = createGltfLoader()
+  const gltf = await loader.parseAsync(buf, '')
+  return gltf.scene
 }
 
 /** Normalize so AABB sits on Y=0 and longest horizontal span ≈ targetMeters (optional). */
@@ -72,7 +61,7 @@ export function normalizeScene(
   return { bbox: { x: size.x, y: size.y, z: size.z } }
 }
 
-async function renderThumb(root: THREE.Object3D): Promise<Blob | undefined> {
+export async function renderThumb(root: THREE.Object3D): Promise<Blob | undefined> {
   try {
     const width = 256
     const height = 256
@@ -138,7 +127,7 @@ export async function uploadGlbFile(
     )
   }
   const buf = await file.arrayBuffer()
-  if (readMagic(buf) !== GLB_MAGIC) {
+  if (!isGlbBuffer(buf)) {
     throw new UploadValidationError('Ожидается файл GLB (magic glTF)')
   }
 
@@ -146,8 +135,13 @@ export async function uploadGlbFile(
   let scene: THREE.Group
   try {
     scene = await loadGltfFromBlob(blob)
-  } catch {
-    throw new UploadValidationError('Не удалось разобрать GLB')
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e)
+    throw new UploadValidationError(
+      detail.includes('DRACO')
+        ? 'GLB использует Draco-сжатие — обновите страницу и попробуйте снова'
+        : `Не удалось разобрать GLB: ${detail}`,
+    )
   }
 
   const { bbox } = normalizeScene(scene, opts.normalizeHorizontalM ?? 0)
@@ -168,33 +162,64 @@ export async function uploadGlbFile(
   return { record }
 }
 
+export type CacheRemoteResult = {
+  asset: CachedAsset
+  bbox: { x: number; y: number; z: number }
+  thumbBlob?: Blob
+}
+
 /**
- * Cache a remote GLB into IndexedDB (after library pick).
+ * Upsert a remote (or already-fetched) GLB into the stable-key asset cache.
  */
 export async function cacheRemoteGlb(opts: {
-  url: string
-  name: string
-  sourceLibrary: string
-  attribution?: LocalModelRecord['attribution']
-}): Promise<LocalModelRecord> {
-  const res = await fetch(opts.url)
-  if (!res.ok) throw new Error(`Скачивание не удалось (${res.status})`)
-  const buf = await res.arrayBuffer()
-  if (buf.byteLength > MAX_BYTES) {
-    throw new UploadValidationError('Скачанный файл слишком большой')
+  cacheKey: string
+  url?: string
+  /** Pre-fetched blob (e.g. from blob: resolve). */
+  blob?: Blob
+  source: CollectionSource
+}): Promise<CacheRemoteResult> {
+  const existing = await getCachedAsset(opts.cacheKey)
+  if (existing) {
+    let bbox = { x: 1, y: 1, z: 1 }
+    let thumbBlob: Blob | undefined
+    try {
+      const scene = await loadGltfFromBlob(existing.blob)
+      bbox = normalizeScene(scene).bbox
+      thumbBlob = await renderThumb(scene)
+    } catch {
+      /* keep defaults */
+    }
+    return { asset: existing, bbox, thumbBlob }
   }
-  // Some sources return glTF JSON — reject non-GLB for cache path simplicity
-  const isGlb = readMagic(buf) === GLB_MAGIC
-  const blob = new Blob([buf], {
-    type: isGlb ? 'model/gltf-binary' : 'model/gltf+json',
-  })
-  if (!isGlb) {
-    // Allow glTF URL for Poly Haven — store as-is; loader can fetch from original URL instead.
-    // For cache we only persist GLB binaries.
-    throw new UploadValidationError(
-      'Удалённый файл не GLB — будет загружен по URL без кэша',
-    )
+
+  let blob = opts.blob
+  if (!blob) {
+    if (!opts.url) throw new Error('Нужен url или blob для кеша')
+    const res = await fetch(opts.url)
+    if (!res.ok) throw new Error(`Скачивание не удалось (${res.status})`)
+    const buf = await res.arrayBuffer()
+    if (buf.byteLength > MAX_BYTES) {
+      throw new UploadValidationError('Скачанный файл слишком большой')
+    }
+    if (!isGlbBuffer(buf)) {
+      throw new UploadValidationError(
+        'Удалённый файл не GLB — будет загружен по URL без кэша',
+      )
+    }
+    blob = new Blob([buf], { type: 'model/gltf-binary' })
+  } else {
+    const buf = await blob.arrayBuffer()
+    if (buf.byteLength > MAX_BYTES) {
+      throw new UploadValidationError('Файл слишком большой для кеша')
+    }
+    if (!isGlbBuffer(buf)) {
+      throw new UploadValidationError(
+        'Файл не GLB — будет загружен по URL без кэша',
+      )
+    }
+    blob = new Blob([buf], { type: 'model/gltf-binary' })
   }
+
   let bbox = { x: 1, y: 1, z: 1 }
   let thumbBlob: Blob | undefined
   try {
@@ -204,16 +229,14 @@ export async function cacheRemoteGlb(opts: {
   } catch {
     /* keep defaults */
   }
-  const record: LocalModelRecord = {
-    id: createLocalId(),
-    name: opts.name,
+
+  const asset: CachedAsset = {
+    cacheKey: opts.cacheKey,
     blob,
-    thumbBlob,
-    bbox,
-    createdAt: Date.now(),
-    sourceLibrary: opts.sourceLibrary,
-    attribution: opts.attribution,
+    contentType: 'model/gltf-binary',
+    fetchedAt: Date.now(),
+    source: opts.source,
   }
-  await putLocalModel(record)
-  return record
+  await putCachedAsset(asset)
+  return { asset, bbox, thumbBlob }
 }

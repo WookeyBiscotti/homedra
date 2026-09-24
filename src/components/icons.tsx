@@ -1,15 +1,17 @@
 import { CONSTRAINT_ICONS } from '../engine/constraints/solver'
 import type { Tool, Workbench } from '../engine/types'
+import { publicUrl } from '../publicUrl'
 
 /** Icons for draft / furnish tools (constraint tools reuse jsketcher SVGs). */
 export const TOOL_ICONS: Partial<Record<Tool, string>> = {
-  select: '/icons/tools/select.svg',
-  wall: '/icons/tools/wall.svg',
-  door: '/icons/tools/door.svg',
-  passage: '/icons/tools/passage.svg',
-  window: '/icons/tools/window.svg',
-  stair: '/icons/tools/stair.svg',
-  placeObject: '/icons/tools/place-object.svg',
+  select: publicUrl('icons/tools/select.svg'),
+  wall: publicUrl('icons/tools/wall.svg'),
+  door: publicUrl('icons/tools/door.svg'),
+  passage: publicUrl('icons/tools/passage.svg'),
+  window: publicUrl('icons/tools/window.svg'),
+  stair: publicUrl('icons/tools/stair.svg'),
+  floor: publicUrl('icons/tools/floor.svg'),
+  placeObject: publicUrl('icons/tools/place-object.svg'),
   lockLength: CONSTRAINT_ICONS.fixedLength,
   lockPoint: CONSTRAINT_ICONS.fixedPosition,
   horizontal: CONSTRAINT_ICONS.horizontal,
@@ -18,14 +20,14 @@ export const TOOL_ICONS: Partial<Record<Tool, string>> = {
 }
 
 export const UI_ICONS = {
-  undo: '/icons/ui/undo.svg',
-  redo: '/icons/ui/redo.svg',
-  delete: '/icons/tools/delete.svg',
-  merge: '/icons/tools/merge.svg',
+  undo: publicUrl('icons/ui/undo.svg'),
+  redo: publicUrl('icons/ui/redo.svg'),
+  delete: publicUrl('icons/tools/delete.svg'),
+  merge: publicUrl('icons/tools/merge.svg'),
   workbench: {
-    draft: '/icons/ui/workbench-draft.svg',
-    paint: '/icons/ui/workbench-paint.svg',
-    furnish: '/icons/ui/workbench-furnish.svg',
+    draft: publicUrl('icons/ui/workbench-draft.svg'),
+    paint: publicUrl('icons/ui/workbench-paint.svg'),
+    furnish: publicUrl('icons/ui/workbench-furnish.svg'),
   } satisfies Record<Workbench, string>,
 } as const
 

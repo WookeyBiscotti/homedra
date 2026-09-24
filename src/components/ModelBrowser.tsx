@@ -8,10 +8,31 @@ import {
 import type { LibraryId, ModelHit, ModelVariant } from '../models/types'
 import { hitAttribution, hitToModelRef } from '../models/types'
 import type { ModelAttribution, ModelRef } from '../engine/types'
-import { uploadGlbFile, UploadValidationError } from '../models/upload'
+import {
+  cacheRemoteGlb,
+  uploadGlbFile,
+  UploadValidationError,
+} from '../models/upload'
+import {
+  cacheKeyForLibrary,
+  cacheKeyForModelRef,
+  sourceFromModelRef,
+  urlCacheKey,
+} from '../models/assetCache'
+import {
+  buildCollectionItems,
+  childrenOf,
+  listFolders,
+  putItems,
+  type CollectionFolder,
+} from '../models/collection'
 import type { ScenePart } from '../models/sceneParts'
 import { useBuildingStore } from '../store/buildingStore'
 import { ModelPreview } from './ModelPreview'
+import {
+  SizeCalibrateScene,
+  type SizeCalibrateResult,
+} from './SizeCalibrateScene'
 
 const TOKEN_KEYS: Partial<Record<LibraryId, LibraryTokenKey>> = {
   polyPizza: 'polyPizza',
@@ -78,7 +99,6 @@ function pageWindow(current: number, totalPages: number): (number | '…')[] {
 export function ModelBrowser() {
   const open = useBuildingStore((s) => s.modelBrowserOpen)
   const setOpen = useBuildingStore((s) => s.setModelBrowserOpen)
-  const setPendingModel = useBuildingStore((s) => s.setPendingModel)
   const setLibraryTokensOpen = useBuildingStore((s) => s.setLibraryTokensOpen)
 
   const [tab, setTab] = useState<LibraryId>('catalog')
@@ -98,6 +118,14 @@ export function ModelBrowser() {
   const [uploading, setUploading] = useState(false)
   const [preview, setPreview] = useState<PreviewState | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
+  const [calibrating, setCalibrating] = useState(false)
+  const [folderPick, setFolderPick] = useState<{
+    scale: SizeCalibrateResult
+    mode: 'single' | 'whole'
+  } | null>(null)
+  const [folders, setFolders] = useState<CollectionFolder[]>([])
+  const [targetFolderId, setTargetFolderId] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => subscribeLibraryTokens(() => setTokenTick((n) => n + 1)), [])
 
@@ -109,7 +137,11 @@ export function ModelBrowser() {
   }, [])
 
   useEffect(() => {
-    if (!open) clearPreview()
+    if (!open) {
+      clearPreview()
+      setCalibrating(false)
+      setFolderPick(null)
+    }
   }, [open, clearPreview])
 
   const tokenKey = TOKEN_KEYS[tab]
@@ -321,12 +353,97 @@ export function ModelBrowser() {
     })
   }
 
-  const onPlace = () => {
+  const cacheKeyForPreview = (prev: PreviewState): string => {
+    const ref = prev.ref
+    if (ref.source === 'library') {
+      return cacheKeyForLibrary(ref.library, ref.id, prev.variantId)
+    }
+    const key = cacheKeyForModelRef(ref)
+    if (key) return key
+    if (ref.source === 'url') return urlCacheKey(ref.url)
+    return `misc:${prev.hit.library}:${prev.hit.id}`
+  }
+
+  const onAddToCollection = () => {
     if (!preview) return
-    const { ref, attribution, revokeOnDispose, url } = preview
-    if (revokeOnDispose) URL.revokeObjectURL(url)
-    setPreview(null)
-    setPendingModel({ model: ref, attribution })
+    setCalibrating(true)
+  }
+
+  const onCalibrateConfirm = async (result: SizeCalibrateResult) => {
+    setCalibrating(false)
+    const list = await listFolders()
+    setFolders(list)
+    setTargetFolderId(null)
+    const mode: 'single' | 'whole' =
+      preview &&
+      !preview.objectId &&
+      preview.sceneParts.length > 1
+        ? 'whole'
+        : 'single'
+    setFolderPick({ scale: result, mode })
+  }
+
+  const commitToCollection = async () => {
+    if (!preview || !folderPick) return
+    setSaving(true)
+    setError(null)
+    try {
+      const cacheKey = cacheKeyForPreview(preview)
+      const source = sourceFromModelRef(
+        preview.ref,
+        preview.attribution ?? hitAttribution(preview.hit),
+      )
+      let blob: Blob | undefined
+      if (preview.url.startsWith('blob:') || preview.revokeOnDispose) {
+        const res = await fetch(preview.url)
+        blob = await res.blob()
+      }
+      let thumbBlob: Blob | undefined
+      let bbox = folderPick.scale.bbox
+      try {
+        const cached = await cacheRemoteGlb({
+          cacheKey,
+          url: blob ? undefined : preview.url,
+          blob,
+          source,
+        })
+        thumbBlob = cached.thumbBlob
+        if (!(bbox.x > 0)) bbox = cached.bbox
+      } catch (e) {
+        // Non-GLB sources (e.g. Poly Haven glTF): keep collection item + source for re-fetch
+        if (!(e instanceof UploadValidationError)) throw e
+        thumbBlob = undefined
+      }
+
+      const items = buildCollectionItems({
+        cacheKey,
+        name: preview.hit.title,
+        folderId: targetFolderId,
+        defaultScale: folderPick.scale.defaultScale,
+        bbox: bbox.x > 0 ? bbox : { x: 1, y: 1, z: 1 },
+        source,
+        thumbBlob,
+        objectId: preview.objectId,
+        parts: preview.sceneParts,
+        mode: folderPick.mode,
+      })
+      await putItems(items)
+
+      if (preview.revokeOnDispose) URL.revokeObjectURL(preview.url)
+      setPreview(null)
+      setFolderPick(null)
+      setOpen(false)
+    } catch (e) {
+      setError(
+        e instanceof UploadValidationError
+          ? e.message
+          : e instanceof Error
+            ? e.message
+            : 'Не удалось добавить в коллекцию',
+      )
+    } finally {
+      setSaving(false)
+    }
   }
 
   const onUpload = async (file: File | undefined) => {
@@ -376,6 +493,7 @@ export function ModelBrowser() {
     <div
       className="tex-modal-backdrop"
       onClick={() => {
+        if (calibrating || folderPick) return
         clearPreview()
         setOpen(false)
       }}
@@ -674,8 +792,8 @@ export function ModelBrowser() {
                   )}
 
                   <div className="model-preview-actions">
-                    <button type="button" onClick={onPlace}>
-                      Поставить
+                    <button type="button" onClick={onAddToCollection}>
+                      В коллекцию
                     </button>
                     <button
                       type="button"
@@ -687,10 +805,10 @@ export function ModelBrowser() {
                   </div>
                   <p className="muted model-preview-hint">
                     {preview.hit.variants && preview.hit.variants.length > 1
-                      ? 'Выберите файл, затем «Поставить» и кликните на плане.'
+                      ? 'Выберите файл, затем «В коллекцию» и настройте размер.'
                       : preview.sceneParts.length > 1
-                        ? 'Выберите часть сцены, затем «Поставить» и кликните на плане.'
-                        : 'После «Поставить» кликните на плане или полу в 3D.'}
+                        ? 'Выберите часть или оставьте «Всё» — весь ассет разобьётся на объекты в коллекции.'
+                        : 'После добавления настройте размер по шкале в метрах.'}
                   </p>
                 </>
               )}
@@ -699,10 +817,101 @@ export function ModelBrowser() {
         )}
 
         <footer className="tex-modal-footer muted">
-          По {PAGE_SIZE} моделей на странице. Внешние библиотеки — через прокси
-          Vite.
+          По {PAGE_SIZE} моделей на странице. Добавление — в коллекцию с
+          калибровкой размера.
         </footer>
       </div>
+
+      {calibrating && preview && (
+        <SizeCalibrateScene
+          url={preview.url}
+          objectId={preview.objectId}
+          onConfirm={(r) => void onCalibrateConfirm(r)}
+          onCancel={() => setCalibrating(false)}
+        />
+      )}
+
+      {folderPick && preview && (
+        <div className="tex-modal-backdrop" role="dialog" aria-modal>
+          <div className="tex-modal collection-folder-pick">
+            <header className="tex-modal-header">
+              <h3>Папка в коллекции</h3>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => setFolderPick(null)}
+              >
+                Отмена
+              </button>
+            </header>
+            <div className="collection-folder-pick-body">
+              <p className="muted">Куда добавить «{preview.hit.title}»?</p>
+              {preview.sceneParts.length > 1 && (
+                <div className="collection-add-mode" role="group">
+                  <button
+                    type="button"
+                    className={
+                      folderPick.mode === 'single' ? 'active' : undefined
+                    }
+                    onClick={() =>
+                      setFolderPick((p) =>
+                        p ? { ...p, mode: 'single' } : p,
+                      )
+                    }
+                  >
+                    {preview.objectId
+                      ? 'Только выбранную часть'
+                      : 'Как один объект'}
+                  </button>
+                  <button
+                    type="button"
+                    className={
+                      folderPick.mode === 'whole' ? 'active' : undefined
+                    }
+                    onClick={() =>
+                      setFolderPick((p) =>
+                        p ? { ...p, mode: 'whole' } : p,
+                      )
+                    }
+                  >
+                    Весь ассет ({preview.sceneParts.length} объектов)
+                  </button>
+                </div>
+              )}
+              <label>
+                <span className="muted">Папка</span>
+                <select
+                  value={targetFolderId ?? ''}
+                  onChange={(e) =>
+                    setTargetFolderId(e.target.value || null)
+                  }
+                >
+                  <option value="">Корень</option>
+                  {folders.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.parentId
+                        ? `${folders.find((p) => p.id === f.parentId)?.name ?? '…'} / ${f.name}`
+                        : f.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {childrenOf(folders, null).length === 0 && (
+                <p className="muted">Папок пока нет — можно сохранить в корень.</p>
+              )}
+              <div className="model-preview-actions">
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => void commitToCollection()}
+                >
+                  {saving ? 'Сохранение…' : 'Добавить'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
