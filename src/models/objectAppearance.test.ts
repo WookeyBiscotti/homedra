@@ -126,8 +126,9 @@ describe('applyAppearanceToObject', () => {
         ['polyhaven:wood_floor', { map, roughnessMap }],
       ]),
     )
-    const mat = mesh.material as THREE.MeshStandardMaterial
-    expect(mat.isMeshStandardMaterial).toBe(true)
+    const mat = mesh.material
+    expect(mat).toBeInstanceOf(THREE.MeshStandardMaterial)
+    if (!(mat instanceof THREE.MeshStandardMaterial)) return
     expect(mat.map).toBe(map)
     expect(mat.roughnessMap).toBe(roughnessMap)
     expect(mat.roughness).toBe(1)

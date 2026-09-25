@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { defaultPlantShape } from './plantShape'
-import { EZ_TREE_PRESETS, listSpecies, speciesByKey } from './species'
+import {
+  EZ_TREE_PRESETS,
+  listSpecies,
+  speciesByKey,
+  type EzTreePresetName,
+} from './species'
 
 describe('EZ-Tree presets', () => {
   it('exposes every official EZ-Tree plant type in the roster', () => {
     const presets = new Set(
       listSpecies()
         .map((s) => s.eztreePreset)
-        .filter((p): p is string => Boolean(p)),
+        .filter((p): p is EzTreePresetName => p != null),
     )
     for (const name of EZ_TREE_PRESETS) {
       expect(presets.has(name)).toBe(true)
