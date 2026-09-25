@@ -15,7 +15,9 @@ import {
   type CollectionItemJson,
   type CollectionSource,
 } from './collection'
+import { base64ToBlob, blobToBase64 } from './blobBase64'
 import { getLocalModel } from './localStore'
+import { PROFILE_KIND } from './profilePackage'
 
 export type PackagedAsset = {
   contentType: string
@@ -28,26 +30,6 @@ export type ProjectPackageV2 = {
   building: Building
   assets: Record<string, PackagedAsset>
   collectionItems: CollectionItemJson[]
-}
-
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const s = reader.result as string
-      const i = s.indexOf(',')
-      resolve(i >= 0 ? s.slice(i + 1) : s)
-    }
-    reader.onerror = () => reject(reader.error ?? new Error('base64 failed'))
-    reader.readAsDataURL(blob)
-  })
-}
-
-function base64ToBlob(b64: string, contentType: string): Blob {
-  const bin = atob(b64)
-  const bytes = new Uint8Array(bin.length)
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-  return new Blob([bytes], { type: contentType })
 }
 
 function collectModelRefs(building: Building): ModelRef[] {
@@ -163,6 +145,14 @@ export function parseImportJson(json: string): {
   package?: ProjectPackageV2
 } {
   const data = JSON.parse(json) as Building | ProjectPackageV2
+  if (
+    data &&
+    typeof data === 'object' &&
+    'kind' in data &&
+    (data as { kind?: unknown }).kind === PROFILE_KIND
+  ) {
+    throw new Error('Это файл профиля — откройте Профиль и нажмите «Импорт»')
+  }
   if (
     data &&
     typeof data === 'object' &&

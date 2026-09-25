@@ -3,6 +3,7 @@ import polygonClipping from 'polygon-clipping'
 import type { Floor, Wall, WallSide } from '../types'
 import { wallFaceEndpoints, wallAxes } from './wallSolid'
 import { openingsForWall, openingSpan } from './openings'
+import { tessellateByMaxEdge } from './tessellate'
 
 export const WALL_FINISH_OUTSET = 0.025
 /** @deprecated use WALL_FINISH_OUTSET */
@@ -553,16 +554,18 @@ export function inflatePolygonOutward(
   return out
 }
 
-/** AO needs uv2; normal maps need tangents on custom BufferGeometry. */
+/** AO needs uv2; normal maps need tangents; displacement needs dense verts. */
 function finalizePbrGeometry(geo: THREE.BufferGeometry): THREE.BufferGeometry {
-  const uv = geo.attributes.uv
+  const tess = tessellateByMaxEdge(geo)
+  if (tess !== geo) geo.dispose()
+  const uv = tess.attributes.uv
   if (uv) {
-    geo.setAttribute('uv2', uv.clone())
+    tess.setAttribute('uv2', uv.clone())
   }
   try {
-    geo.computeTangents()
+    tess.computeTangents()
   } catch {
     // Non-indexed or degenerate — skip; normalMap still mostly works
   }
-  return geo
+  return tess
 }

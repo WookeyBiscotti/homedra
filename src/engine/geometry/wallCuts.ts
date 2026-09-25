@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { Floor, Opening, SlabOpening, Wall } from '../types'
 import { openingsForWall, openingSpan, wallEndpoints } from './openings'
 import { slabOpeningCorners } from './slabOpenings'
+import { tessellateByMaxEdge } from './tessellate'
 import { joinedWallFootprint, wallAxes } from './wallSolid'
 
 /** Slight inset into the void so finishes sit clear of the solid. */
@@ -363,13 +364,15 @@ function finalizeCutGeometry(
   geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3))
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
   geo.setIndex(indices)
-  const uv = geo.attributes.uv
-  if (uv) geo.setAttribute('uv2', uv.clone())
+  const tess = tessellateByMaxEdge(geo)
+  if (tess !== geo) geo.dispose()
+  const uv = tess.attributes.uv
+  if (uv) tess.setAttribute('uv2', uv.clone())
   try {
-    geo.computeTangents()
+    tess.computeTangents()
   } catch {
     // ignore
   }
-  geo.computeBoundingSphere()
-  return geo
+  tess.computeBoundingSphere()
+  return tess
 }

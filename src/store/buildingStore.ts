@@ -3332,8 +3332,13 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
             : 'Проект загружен',
         })
         return true
-      } catch {
-        set({ statusMessage: 'Ошибка загрузки JSON' })
+      } catch (e) {
+        set({
+          statusMessage:
+            e instanceof Error && e.message.includes('файл профиля')
+              ? e.message
+              : 'Ошибка загрузки JSON',
+        })
         return false
       }
     },

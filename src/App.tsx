@@ -43,6 +43,7 @@ function TopBar() {
   const exportProjectPackage = useBuildingStore((s) => s.exportProjectPackage)
   const importJson = useBuildingStore((s) => s.importJson)
   const newProject = useBuildingStore((s) => s.newProject)
+  const setLibraryTokensOpen = useBuildingStore((s) => s.setLibraryTokensOpen)
   const fileRef = useRef<HTMLInputElement>(null)
 
   return (
@@ -134,6 +135,9 @@ function TopBar() {
         </button>
         <button type="button" onClick={() => fileRef.current?.click()}>
           Импорт
+        </button>
+        <button type="button" onClick={() => setLibraryTokensOpen(true)}>
+          Профиль
         </button>
         <input
           ref={fileRef}

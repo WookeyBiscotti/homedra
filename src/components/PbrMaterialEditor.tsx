@@ -1,6 +1,7 @@
 /** Shared PBR slider / color / ambientCG texture controls. */
 
 import type { MaterialRef, ObjectMaterialOverride } from '../engine/types'
+import { DEFAULT_DISPLACEMENT_SCALE } from '../materials/ambientcg'
 import type { PbrSample } from '../models/objectAppearance'
 import { MaterialSlot } from './TextureBrowser'
 
@@ -216,10 +217,23 @@ export function PbrMaterialEditor({
         }
         onClear={() => onChange(patch(value, 'aoMapIntensity', undefined))}
       />
+      <NumRow
+        label="Рельеф (м)"
+        value={value.displacementScale}
+        fallback={sample?.displacementScale ?? DEFAULT_DISPLACEMENT_SCALE}
+        min={0}
+        max={0.15}
+        step={0.005}
+        onChange={(n) =>
+          onChange({ ...value, displacementScale: Math.max(0, n) })
+        }
+        onClear={() => onChange(patch(value, 'displacementScale', undefined))}
+      />
 
       <MaterialSlot
-        label="Текстуры ambientCG"
+        label="Текстура"
         value={value.material}
+        preferCollection
         onChange={(ref: MaterialRef) => onChange({ ...value, material: ref })}
         onClear={() => onChange(patch(value, 'material', null))}
       />

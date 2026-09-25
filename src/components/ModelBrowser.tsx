@@ -564,7 +564,7 @@ export function ModelBrowser() {
               className="ghost"
               onClick={() => setLibraryTokensOpen(true)}
             >
-              API ключи
+              Профиль
             </button>
             <button
               type="button"
@@ -623,7 +623,7 @@ export function ModelBrowser() {
               в этом браузере.
             </p>
             <button type="button" onClick={() => setLibraryTokensOpen(true)}>
-              Открыть настройки ключей
+              Открыть профиль
             </button>
           </div>
         ) : (

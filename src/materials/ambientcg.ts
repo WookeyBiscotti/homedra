@@ -1,4 +1,8 @@
 import type { MaterialRef } from '../engine/types'
+import { fetchTextureBlob, getLocalTexture } from './customTextures'
+import { resolvePolyHavenMaps } from './catalogs/polyhavenTextures'
+import { ensureDisplacementMap } from './heightFromNormal'
+import { proxiedAssetUrl, proxiedTextureUrl } from '../models/proxyUrl'
 import { publicUrl } from '../publicUrl'
 import * as THREE from 'three'
 
@@ -30,6 +34,7 @@ export interface AmbientcgMaps {
   roughness?: string
   metalness?: string
   ao?: string
+  displacement?: string
 }
 
 type CatalogAsset = {
@@ -82,7 +87,7 @@ function toSummary(a: CatalogAsset): AmbientcgAssetSummary {
     thumbnailUrl: thumbnailUrl(a.id),
     tileWidthM: a.tileWidthM,
     tileHeightM: a.tileHeightM,
-    maps: ['color', 'normal', 'roughness', 'metalness', 'ao'],
+    maps: ['color', 'normal', 'roughness', 'metalness', 'ao', 'displacement'],
   }
 }
 
@@ -122,6 +127,7 @@ export function resolveMaps(assetId: string): AmbientcgMaps {
     roughness: `${base}_Roughness.jpg`,
     metalness: `${base}_Metalness.jpg`,
     ao: `${base}_AmbientOcclusion.jpg`,
+    displacement: `${base}_Displacement.jpg`,
   }
 }
 
@@ -162,6 +168,35 @@ async function fetchCachedBlob(url: string): Promise<Blob> {
 
 const textureCache = new Map<string, Promise<THREE.Texture>>()
 
+function textureFromBlob(
+  blob: Blob,
+  colorSpace: boolean,
+): Promise<THREE.Texture> {
+  const objectUrl = URL.createObjectURL(blob)
+  return new Promise<THREE.Texture>((resolve, reject) => {
+    const loader = new THREE.TextureLoader()
+    loader.load(
+      objectUrl,
+      (tex) => {
+        URL.revokeObjectURL(objectUrl)
+        tex.wrapS = THREE.RepeatWrapping
+        tex.wrapT = THREE.RepeatWrapping
+        tex.colorSpace = colorSpace
+          ? THREE.SRGBColorSpace
+          : THREE.NoColorSpace
+        tex.anisotropy = 8
+        tex.needsUpdate = true
+        resolve(tex)
+      },
+      undefined,
+      (err) => {
+        URL.revokeObjectURL(objectUrl)
+        reject(err)
+      },
+    )
+  })
+}
+
 function loadTextureFromUrl(url: string, colorSpace: boolean): Promise<THREE.Texture> {
   const key = `${colorSpace ? 'c' : 'd'}:${url}`
   let pending = textureCache.get(key)
@@ -170,34 +205,27 @@ function loadTextureFromUrl(url: string, colorSpace: boolean): Promise<THREE.Tex
   pending = (async () => {
     const blob = await fetchCachedBlob(url)
     if (blob.size < 100) throw new Error(`Empty texture ${url}`)
-    const objectUrl = URL.createObjectURL(blob)
-    return await new Promise<THREE.Texture>((resolve, reject) => {
-      const loader = new THREE.TextureLoader()
-      loader.load(
-        objectUrl,
-        (tex) => {
-          URL.revokeObjectURL(objectUrl)
-          tex.wrapS = THREE.RepeatWrapping
-          tex.wrapT = THREE.RepeatWrapping
-          tex.colorSpace = colorSpace
-            ? THREE.SRGBColorSpace
-            : THREE.NoColorSpace
-          tex.anisotropy = 8
-          tex.needsUpdate = true
-          resolve(tex)
-        },
-        undefined,
-        (err) => {
-          URL.revokeObjectURL(objectUrl)
-          reject(err)
-        },
-      )
-    })
+    return await textureFromBlob(blob, colorSpace)
   })()
 
   textureCache.set(key, pending)
   pending.catch(() => textureCache.delete(key))
   return pending
+}
+
+async function loadCustomMaps(ref: MaterialRef): Promise<LoadedPbrMaps> {
+  const rec = await getLocalTexture(ref.assetId)
+  let blob = rec?.blob
+  if (!blob && ref.url) {
+    blob = await fetchTextureBlob(ref.url)
+  }
+  if (!blob) {
+    throw new Error(`Custom texture ${ref.assetId} not found`)
+  }
+  const map = await textureFromBlob(blob, true)
+  const maps: LoadedPbrMaps = { map }
+  applyTileRepeat(maps, ref.tileSizeM)
+  return maps
 }
 
 async function loadFirstTexture(
@@ -216,30 +244,91 @@ async function loadFirstTexture(
   throw lastErr ?? new Error('No texture URL worked')
 }
 
+/** Meters of vertex offset when the displacement map is 1. */
+export const DEFAULT_DISPLACEMENT_SCALE = 0.025
+
 export interface LoadedPbrMaps {
   map: THREE.Texture
   normalMap?: THREE.Texture
   roughnessMap?: THREE.Texture
   metalnessMap?: THREE.Texture
   aoMap?: THREE.Texture
+  displacementMap?: THREE.Texture
+}
+
+async function loadUrlMaps(ref: MaterialRef): Promise<LoadedPbrMaps> {
+  if (!ref.url) throw new Error(`Нет URL текстуры ${ref.assetId}`)
+  const candidates = [...new Set([proxiedAssetUrl(ref.url), proxiedTextureUrl(ref.url)])]
+  let lastErr: unknown
+  for (const url of candidates) {
+    try {
+      const map = await loadTextureFromUrl(url, true)
+      const maps: LoadedPbrMaps = { map }
+      applyTileRepeat(maps, ref.tileSizeM)
+      return maps
+    } catch (e) {
+      lastErr = e
+    }
+  }
+  throw lastErr ?? new Error(`Не удалось загрузить ${ref.url}`)
+}
+
+async function loadPolyHavenPbr(ref: MaterialRef): Promise<LoadedPbrMaps> {
+  const urls = await resolvePolyHavenMaps(ref.assetId)
+  const map = await loadTextureFromUrl(proxiedAssetUrl(urls.color), true)
+  const [normalMap, roughnessMap, metalnessMap, aoMap, displacementMap] =
+    await Promise.all([
+      urls.normal
+        ? loadTextureFromUrl(proxiedAssetUrl(urls.normal), false).catch(
+            () => undefined,
+          )
+        : undefined,
+      urls.roughness
+        ? loadTextureFromUrl(proxiedAssetUrl(urls.roughness), false).catch(
+            () => undefined,
+          )
+        : undefined,
+      urls.metalness
+        ? loadTextureFromUrl(proxiedAssetUrl(urls.metalness), false).catch(
+            () => undefined,
+          )
+        : undefined,
+      urls.ao
+        ? loadTextureFromUrl(proxiedAssetUrl(urls.ao), false).catch(() => undefined)
+        : undefined,
+      urls.displacement
+        ? loadTextureFromUrl(proxiedAssetUrl(urls.displacement), false).catch(
+            () => undefined,
+          )
+        : undefined,
+    ])
+  const maps: LoadedPbrMaps = {
+    map,
+    normalMap,
+    roughnessMap,
+    metalnessMap,
+    aoMap,
+    displacementMap,
+  }
+  ensureDisplacementMap(maps)
+  applyTileRepeat(maps, ref.tileSizeM)
+  return maps
 }
 
 export async function loadPbrMaps(ref: MaterialRef): Promise<LoadedPbrMaps> {
+  if (ref.source === 'custom') return loadCustomMaps(ref)
+  if (ref.source === 'polyhaven') return loadPolyHavenPbr(ref)
+  if (ref.source === 'pixabay' || ref.source === 'pexels') return loadUrlMaps(ref)
   const urls = resolveMaps(ref.assetId)
-  const { tex: colorSrc, fromPreview } = await loadFirstTexture(
+  const { tex: colorSrc } = await loadFirstTexture(
     urls.colorCandidates,
     true,
   )
   const map = colorSrc.clone()
   map.needsUpdate = true
 
-  // Extra maps only when real surface-preview color was found (thumbs aren't PBR).
-  let normalMap: THREE.Texture | undefined
-  let roughnessMap: THREE.Texture | undefined
-  let metalnessMap: THREE.Texture | undefined
-  let aoMap: THREE.Texture | undefined
-  if (fromPreview) {
-    const [normalSrc, roughnessSrc, metalnessSrc, aoSrc] = await Promise.all([
+  const [normalSrc, roughnessSrc, metalnessSrc, aoSrc, displacementSrc] =
+    await Promise.all([
       urls.normal
         ? loadTextureFromUrl(urls.normal, false).catch(() => undefined)
         : Promise.resolve(undefined),
@@ -252,16 +341,21 @@ export async function loadPbrMaps(ref: MaterialRef): Promise<LoadedPbrMaps> {
       urls.ao
         ? loadTextureFromUrl(urls.ao, false).catch(() => undefined)
         : Promise.resolve(undefined),
+      urls.displacement
+        ? loadTextureFromUrl(urls.displacement, false).catch(() => undefined)
+        : Promise.resolve(undefined),
     ])
-    normalMap = normalSrc?.clone()
-    roughnessMap = roughnessSrc?.clone()
-    metalnessMap = metalnessSrc?.clone()
-    aoMap = aoSrc?.clone()
-    if (normalMap) normalMap.needsUpdate = true
-    if (roughnessMap) roughnessMap.needsUpdate = true
-    if (metalnessMap) metalnessMap.needsUpdate = true
-    if (aoMap) aoMap.needsUpdate = true
+  const cloneMap = (src: THREE.Texture | undefined) => {
+    if (!src) return undefined
+    const tex = src.clone()
+    tex.needsUpdate = true
+    return tex
   }
+  const normalMap = cloneMap(normalSrc)
+  const roughnessMap = cloneMap(roughnessSrc)
+  const metalnessMap = cloneMap(metalnessSrc)
+  const aoMap = cloneMap(aoSrc)
+  const displacementMap = cloneMap(displacementSrc)
 
   const maps: LoadedPbrMaps = {
     map,
@@ -269,7 +363,9 @@ export async function loadPbrMaps(ref: MaterialRef): Promise<LoadedPbrMaps> {
     roughnessMap,
     metalnessMap,
     aoMap,
+    displacementMap,
   }
+  ensureDisplacementMap(maps)
   applyTileRepeat(maps, ref.tileSizeM)
   return maps
 }
@@ -292,6 +388,7 @@ export function applyTileRepeat(
     maps.roughnessMap,
     maps.metalnessMap,
     maps.aoMap,
+    maps.displacementMap,
   ]) {
     if (!t) continue
     t.repeat.set(sx, sy)

@@ -6,12 +6,19 @@ export interface Vertex {
   y: number
 }
 
-/** PBR material reference (ambientCG asset; binary maps are not stored in JSON). */
+/** PBR / albedo material reference. Binary maps stay in cache / IndexedDB. */
 export interface MaterialRef {
-  source: 'ambientcg'
+  source: 'ambientcg' | 'polyhaven' | 'pixabay' | 'pexels' | 'custom'
+  /** Catalog asset id, or IndexedDB id for a user texture. */
   assetId: string
   /** Meters per texture repeat (tile size). */
   tileSizeM: number
+  /** Vertex displacement amplitude in meters when a height map is present. */
+  displacementScale?: number
+  /** Image URL for photo catalogs or a custom import from a link. */
+  url?: string
+  /** Display name. */
+  name?: string
 }
 
 /** Side of a wall relative to direction a→b and its left-hand normal. */
@@ -500,6 +507,8 @@ export type ObjectMaterialOverride = {
   /** Uniform normal map strength. */
   normalScale?: number
   aoMapIntensity?: number
+  /** Vertex displacement amplitude in meters. */
+  displacementScale?: number
 }
 
 /** Visual overrides applied when rendering a placed GLB. */

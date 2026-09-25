@@ -23,6 +23,10 @@ const EXT_ALLOW = [
   'media.sketchfab.com',
   'static.sketchfab.com',
   'sketchfab-prod-media.s3.amazonaws.com',
+  'pixabay.com',
+  'cdn.pixabay.com',
+  'api.pexels.com',
+  'images.pexels.com',
 ]
 
 function isAllowedHost(hostname: string): boolean {
@@ -35,6 +39,8 @@ function isAllowedHost(hostname: string): boolean {
   // Sketchfab signed archives live on sketchfab-*-media.s3*.amazonaws.com
   if (h.includes('sketchfab') && h.endsWith('.amazonaws.com')) return true
   if (h.endsWith('.r2.dev')) return true
+  if (h.endsWith('.pixabay.com') || h === 'pixabay.com') return true
+  if (h.endsWith('.pexels.com') || h === 'pexels.com') return true
   return EXT_ALLOW.some((a) => h === a || h.endsWith(`.${a}`))
 }
 
@@ -81,7 +87,9 @@ export function assetProxyPlugin(): Plugin {
     use: (fn: (req: any, res: any, next: () => void) => void) => void
   }) => {
     middlewares.use(async (req, res, next) => {
-      if (!req.url?.startsWith('/proxy/ext')) {
+      const isExt = !!req.url?.startsWith('/proxy/ext')
+      const isTex = !!req.url?.startsWith('/proxy/tex')
+      if (!isExt && !isTex) {
         next()
         return
       }
@@ -106,7 +114,7 @@ export function assetProxyPlugin(): Plugin {
           res.end('unsupported protocol')
           return
         }
-        if (!isAllowedHost(dest.hostname)) {
+        if (isExt && !isAllowedHost(dest.hostname)) {
           res.statusCode = 403
           res.end(`host not allowed: ${dest.hostname}`)
           return
@@ -132,6 +140,23 @@ export function assetProxyPlugin(): Plugin {
           const media = toMediaGithubUrl(dest.href)
           if (media && isAllowedHost(new URL(media).hostname)) {
             result = await fetchAllowed(new URL(media), headers)
+          }
+        }
+
+        if (isTex) {
+          const TEX_MAX = 16 * 1024 * 1024
+          if (result.buf.byteLength > TEX_MAX) {
+            res.statusCode = 413
+            res.end('texture too large')
+            return
+          }
+          const looksImage =
+            (result.contentType && result.contentType.startsWith('image/')) ||
+            /\.(jpe?g|png|webp|gif|avif|bmp)$/i.test(dest.pathname)
+          if (result.status === 200 && !looksImage) {
+            res.statusCode = 415
+            res.end('not an image')
+            return
           }
         }
 

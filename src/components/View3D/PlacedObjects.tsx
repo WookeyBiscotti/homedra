@@ -25,6 +25,11 @@ import {
 } from '../../models/objectFootprintCache'
 import { useBuildingStore } from '../../store/buildingStore'
 import { useApplyAppearance } from '../../hooks/useApplyAppearance'
+import { listSceneMaterials } from '../../models/objectAppearance'
+import {
+  forgetObjectMaterials,
+  publishObjectMaterials,
+} from '../../models/objectMaterialRegistry'
 
 const AABB_COLOR = '#c45c26'
 
@@ -265,6 +270,11 @@ function GlbInstance({
   }, [mixer, actions, obj.animationTime, clipDuration, invalidate])
 
   useApplyAppearance(scene, obj.appearance)
+
+  useEffect(() => {
+    publishObjectMaterials(obj.id, listSceneMaterials(scene))
+    return () => forgetObjectMaterials(obj.id)
+  }, [obj.id, scene])
 
   useLayoutEffect(() => {
     if (!groupRef.current || dragging || xyDragging.current) return

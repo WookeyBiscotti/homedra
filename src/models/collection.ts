@@ -41,6 +41,20 @@ export async function putFolder(folder: CollectionFolder): Promise<void> {
   }
 }
 
+export async function putFolders(recs: CollectionFolder[]): Promise<void> {
+  if (recs.length === 0) return
+  const db = await openModelsDb()
+  try {
+    const tx = db.transaction(STORE_FOLDERS, 'readwrite')
+    const store = tx.objectStore(STORE_FOLDERS)
+    for (const rec of recs) {
+      await idbReq(store.put(rec))
+    }
+  } finally {
+    db.close()
+  }
+}
+
 export async function getFolder(
   id: string,
 ): Promise<CollectionFolder | undefined> {

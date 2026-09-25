@@ -16,8 +16,11 @@ import {
 function slotKey(v: ObjectMaterialOverride): string {
   return [
     v.tint ?? '',
+    v.material?.source ?? '',
     v.material?.assetId ?? '',
+    v.material?.url ?? '',
     v.material?.tileSizeM ?? '',
+    v.material?.displacementScale ?? '',
     v.roughness ?? '',
     v.metalness ?? '',
     v.emissive ?? '',
@@ -26,6 +29,7 @@ function slotKey(v: ObjectMaterialOverride): string {
     v.envMapIntensity ?? '',
     v.normalScale ?? '',
     v.aoMapIntensity ?? '',
+    v.displacementScale ?? '',
   ].join(',')
 }
 

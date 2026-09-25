@@ -13,12 +13,15 @@ import {
 import { applyHeightsToPositions, ensureTerrain, terrainFrame } from '../../landscape/terrain'
 import { loadPbrMaps } from '../../materials/ambientcg'
 import { applyTileRepeat } from '../../materials/ambientcg'
+import { materialCacheKey } from '../../materials/customTextures'
 import type { MaterialRef } from '../../engine/types'
 import { useBuildingStore } from '../../store/buildingStore'
 import { disableRaycast } from './PaintPickables'
 
 function useSplatMaps(layers: Array<MaterialRef | null | undefined>) {
-  const key = layers.map((l) => (l ? `${l.assetId}:${l.tileSizeM}` : '')).join('|')
+  const key = layers
+    .map((l) => (l ? `${materialCacheKey(l)}:${l.tileSizeM}` : ''))
+    .join('|')
   const [maps, setMaps] = useState<Array<THREE.Texture | null>>([
     null,
     null,

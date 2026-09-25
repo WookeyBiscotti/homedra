@@ -1,29 +1,61 @@
 import { useEffect, useState } from 'react'
 import type { MaterialRef } from '../engine/types'
-import {
-  ambientcgThumbnailUrl,
-  materialRefFromAsset,
-  searchMaterials,
-} from '../materials/ambientcg'
-import { useAmbientcgSearch } from '../materials/useAmbientcgSearch'
+import { DEFAULT_DISPLACEMENT_SCALE, searchMaterials } from '../materials/ambientcg'
+import { getLocalTexture, materialLabel } from '../materials/customTextures'
+import { materialThumbnailUrl } from '../materials/textureCatalog'
+import { TextureSourceTabs } from './CustomTextureLibrary'
+
+export function useMaterialThumb(
+  value: MaterialRef | null | undefined,
+): string | null {
+  const [url, setUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!value) {
+      setUrl(null)
+      return
+    }
+    if (value.source !== 'custom') {
+      setUrl(materialThumbnailUrl(value))
+      return
+    }
+    let revoke: string | null = null
+    let alive = true
+    void getLocalTexture(value.assetId).then((rec) => {
+      if (!alive) return
+      if (rec) {
+        revoke = URL.createObjectURL(rec.blob)
+        setUrl(revoke)
+      } else if (value.url) {
+        setUrl(value.url)
+      } else {
+        setUrl(null)
+      }
+    })
+    return () => {
+      alive = false
+      if (revoke) URL.revokeObjectURL(revoke)
+    }
+  }, [value?.source, value?.assetId, value?.url])
+
+  return url
+}
 
 export function TextureBrowser({
   open,
   onClose,
   onSelect,
-  title = 'Текстура ambientCG',
+  title = 'Текстура',
+  selected,
+  preferCollection = false,
 }: {
   open: boolean
   onClose: () => void
   onSelect: (ref: MaterialRef) => void
   title?: string
+  selected?: MaterialRef | null
+  preferCollection?: boolean
 }) {
-  const [query, setQuery] = useState('')
-  const [draft, setDraft] = useState('')
-  const { assets, total, loading, loadingMore, error, hasMore, loadMore } =
-    useAmbientcgSearch(query, open)
-
-  // Prefetch catalog as soon as a slot mounts so the modal opens with data.
   useEffect(() => {
     void searchMaterials('', { limit: 1 }).catch(() => {})
   }, [])
@@ -44,79 +76,14 @@ export function TextureBrowser({
             Закрыть
           </button>
         </header>
-        <form
-          className="tex-search"
-          onSubmit={(e) => {
-            e.preventDefault()
-            setQuery(draft.trim())
+        <TextureSourceTabs
+          selected={selected}
+          preferCollection={preferCollection}
+          onSelect={(ref) => {
+            onSelect(ref)
+            onClose()
           }}
-        >
-          <input
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder="Поиск: wood, tiles, plaster…"
-            autoFocus
-          />
-          <button type="submit">Найти</button>
-        </form>
-        {loading && <p className="muted">Загрузка…</p>}
-        {error && <p className="conflict">{error}</p>}
-        {!loading && !error && (
-          <p className="muted tex-count">
-            {assets.length} из {total}
-          </p>
-        )}
-        <div className="tex-grid">
-          {assets.map((a) => (
-            <button
-              key={a.id}
-              type="button"
-              className="tex-card"
-              onClick={() => {
-                onSelect(materialRefFromAsset(a))
-                onClose()
-              }}
-            >
-              <img
-                src={a.thumbnailUrl}
-                alt=""
-                loading="lazy"
-                referrerPolicy="no-referrer"
-                onError={(e) => {
-                  const el = e.currentTarget
-                  if (!el.dataset.fallback) {
-                    el.dataset.fallback = '1'
-                    el.src = `https://f003.backblazeb2.com/file/ambientCG-Web/media/surface-preview/${a.id}/${a.id}_SQ_Color.jpg`
-                    return
-                  }
-                  el.style.opacity = '0.25'
-                  el.closest('button')?.classList.add('tex-card-broken')
-                }}
-              />
-              <span>{a.title}</span>
-            </button>
-          ))}
-        </div>
-        {hasMore && (
-          <button
-            type="button"
-            className="tex-load-more"
-            disabled={loadingMore}
-            onClick={() => void loadMore()}
-          >
-            {loadingMore
-              ? 'Загрузка…'
-              : `Ещё материалы (${total - assets.length})`}
-          </button>
-        )}
-        <footer className="tex-modal-footer muted">
-          Каталог ambientCG (CC0), поиск локальный — API без CORS.
-          Карты с{' '}
-          <a href="https://ambientcg.com" target="_blank" rel="noreferrer">
-            ambientCG
-          </a>
-          .
-        </footer>
+        />
       </div>
     </div>
   )
@@ -128,17 +95,17 @@ export function MaterialSlot({
   onChange,
   onClear,
   applyOnly = false,
+  preferCollection = false,
 }: {
   label: string
   value: MaterialRef | null | undefined
   onChange: (ref: MaterialRef) => void
   onClear: () => void
-  /** When true, acts as apply action without showing current value. */
   applyOnly?: boolean
+  preferCollection?: boolean
 }) {
   const [open, setOpen] = useState(false)
-  const thumb =
-    !applyOnly && value ? ambientcgThumbnailUrl(value.assetId, 128) : null
+  const thumb = useMaterialThumb(applyOnly ? null : value)
 
   return (
     <div className="mat-slot">
@@ -167,7 +134,7 @@ export function MaterialSlot({
             referrerPolicy="no-referrer"
             onError={(e) => {
               const el = e.currentTarget
-              if (!value || el.dataset.fallback) {
+              if (!value || value.source !== 'ambientcg' || el.dataset.fallback) {
                 el.style.visibility = 'hidden'
                 return
               }
@@ -183,32 +150,52 @@ export function MaterialSlot({
         <span className="mat-slot-id">
           {applyOnly
             ? 'Выбрать текстуру для всех стен'
-            : (value?.assetId ?? 'Нет текстуры')}
+            : materialLabel(value)}
         </span>
       </button>
       {!applyOnly && value && (
-        <label className="mat-tile">
-          Тайл, м
-          <input
-            type="number"
-            min={0.2}
-            max={10}
-            step={0.1}
-            value={value.tileSizeM}
-            onChange={(e) =>
-              onChange({
-                ...value,
-                tileSizeM: Math.max(0.2, Number(e.target.value) || 1.5),
-              })
-            }
-          />
-        </label>
+        <div className="mat-tile-row">
+          <label className="mat-tile">
+            Тайл, м
+            <input
+              type="number"
+              min={0.2}
+              max={10}
+              step={0.1}
+              value={value.tileSizeM}
+              onChange={(e) =>
+                onChange({
+                  ...value,
+                  tileSizeM: Math.max(0.2, Number(e.target.value) || 1.5),
+                })
+              }
+            />
+          </label>
+          <label className="mat-tile">
+            Рельеф, м
+            <input
+              type="number"
+              min={0}
+              max={0.15}
+              step={0.005}
+              value={value.displacementScale ?? DEFAULT_DISPLACEMENT_SCALE}
+              onChange={(e) =>
+                onChange({
+                  ...value,
+                  displacementScale: Math.max(0, Number(e.target.value) || 0),
+                })
+              }
+            />
+          </label>
+        </div>
       )}
       <TextureBrowser
         open={open}
         onClose={() => setOpen(false)}
         onSelect={onChange}
         title={label}
+        selected={value}
+        preferCollection={preferCollection}
       />
     </div>
   )

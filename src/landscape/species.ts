@@ -2,7 +2,13 @@
 
 export type PlantBiome = 'temperate'
 
-export type PlantGroup = 'conifer' | 'deciduous' | 'fruit' | 'shrub' | 'flower'
+export type PlantGroup =
+  | 'conifer'
+  | 'deciduous'
+  | 'fruit'
+  | 'shrub'
+  | 'trellis'
+  | 'flower'
 
 export type PlantHabit =
   | 'spruce'
@@ -45,7 +51,7 @@ export type SpeciesDef = {
   habit: PlantHabit
   leafKind: LeafKind
   /** Built-in @dgreenheck/ez-tree preset name. */
-  eztreePreset?: string
+  eztreePreset?: EzTreePresetName
   eztreeTune?: EzTreeTune
 }
 
@@ -56,8 +62,31 @@ export const SPECIES_GROUP_LABELS: Record<PlantGroup, string> = {
   deciduous: 'Лиственные',
   fruit: 'Плодовые',
   shrub: 'Кусты',
+  trellis: 'Шпалера',
   flower: 'Цветы',
 }
+
+/** Every built-in @dgreenheck/ez-tree preset. */
+export const EZ_TREE_PRESETS = [
+  'Ash Small',
+  'Ash Medium',
+  'Ash Large',
+  'Aspen Small',
+  'Aspen Medium',
+  'Aspen Large',
+  'Bush 1',
+  'Bush 2',
+  'Bush 3',
+  'Oak Small',
+  'Oak Medium',
+  'Oak Large',
+  'Pine Small',
+  'Pine Medium',
+  'Pine Large',
+  'Trellis',
+] as const
+
+export type EzTreePresetName = (typeof EZ_TREE_PRESETS)[number]
 
 function ez(
   partial: Omit<SpeciesDef, 'biome' | 'habit' | 'flowerColor' | 'fruitColor'> &
@@ -113,20 +142,33 @@ export const GARDEN_SPECIES: SpeciesDef[] = [
     eztreePreset: 'Pine Small',
   }),
   ez({
+    key: 'ezPineLarge',
+    name: 'Сосна крупная',
+    latin: 'Pinus sylvestris',
+    group: 'conifer',
+    height: 18,
+    trunkColor: '#8a5a30',
+    leafColor: '#2a4a28',
+    leafColor2: '#3a5a30',
+    kind: 'conifer',
+    leafKind: 'needle',
+    eztreePreset: 'Pine Large',
+  }),
+  ez({
     key: 'ezYew',
     name: 'Тис',
     latin: 'Taxus baccata',
     group: 'conifer',
     height: 5.5,
-    trunkColor: '#2a2218',
-    leafColor: '#1a3218',
-    leafColor2: '#2a4a22',
+    trunkColor: '#6a4a32',
+    leafColor: '#4a7a40',
+    leafColor2: '#5a8a4a',
     flowerColor: '#6a3a28',
     fruitColor: '#8a1430',
     kind: 'conifer',
     leafKind: 'needle',
     eztreePreset: 'Pine Small',
-    eztreeTune: { leafTint: 0x2a4a28, barkTint: 0x4a3a28 },
+    eztreeTune: { leafTint: 0x7aaa58, barkTint: 0x9a7a52 },
   }),
   ez({
     key: 'ezJuniper',
@@ -323,6 +365,36 @@ export const GARDEN_SPECIES: SpeciesDef[] = [
     leafKind: 'ovate',
     eztreePreset: 'Bush 2',
   }),
+  ez({
+    key: 'ezBush3',
+    name: 'Куст 3',
+    latin: 'Juniperus',
+    group: 'shrub',
+    height: 2.2,
+    trunkColor: '#3a3020',
+    leafColor: '#2a4a28',
+    leafColor2: '#3a5a30',
+    flowerColor: '#6a7a30',
+    fruitColor: '#5a4a28',
+    kind: 'shrub',
+    leafKind: 'spray',
+    eztreePreset: 'Bush 3',
+  }),
+  ez({
+    key: 'ezTrellis',
+    name: 'Шпалера',
+    latin: 'Vitis',
+    group: 'trellis',
+    height: 3.8,
+    trunkColor: '#5a4030',
+    leafColor: '#3a6a28',
+    leafColor2: '#4a7a30',
+    flowerColor: '#c8d8a0',
+    fruitColor: '#6a5a30',
+    kind: 'broadleaf',
+    leafKind: 'ovate',
+    eztreePreset: 'Trellis',
+  }),
   {
     key: 'gardenRose',
     name: 'Роза',
@@ -394,7 +466,6 @@ const LEGACY_SPECIES: Record<string, string> = {
   bigSagebrush: 'ezBush2',
   lilacBush: 'ezBush1',
   hydrangea: 'ezBush2',
-  ezBush3: 'ezJuniper',
 }
 
 export function listSpecies(): SpeciesDef[] {

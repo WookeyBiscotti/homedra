@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import type { MaterialRef } from '../../engine/types'
 import {
   applyTileRepeat,
+  DEFAULT_DISPLACEMENT_SCALE,
   loadPbrMaps,
   type LoadedPbrMaps,
 } from '../../materials/ambientcg'
@@ -40,7 +41,7 @@ export function usePbrMaps(
         setStatus('ok')
       })
       .catch((err) => {
-        console.warn('[PBR] texture load failed', material.assetId, err)
+        console.warn('[PBR] texture load failed', material.source, material.assetId, err)
         if (!alive) return
         setMaps(null)
         setStatus('error')
@@ -51,6 +52,7 @@ export function usePbrMaps(
   }, [
     material?.source,
     material?.assetId,
+    material?.url,
     material?.tileSizeM,
     meterUvs,
     worldWidthM,
@@ -112,13 +114,17 @@ export function PbrStandardMaterial({
           : color
 
   const mapKey = [
-    material?.assetId ?? 'none',
+    material ? `${material.source}:${material.assetId}` : 'none',
     status,
     hasMap ? 'm' : '',
     maps?.normalMap ? 'n' : '',
     maps?.roughnessMap ? 'r' : '',
     maps?.metalnessMap ? 'me' : '',
     maps?.aoMap ? 'ao' : '',
+    maps?.displacementMap ? 'd' : '',
+    maps?.displacementMap
+      ? String(material?.displacementScale ?? DEFAULT_DISPLACEMENT_SCALE)
+      : '',
   ].join('-')
 
   return (
@@ -131,6 +137,12 @@ export function PbrStandardMaterial({
       roughnessMap={maps?.roughnessMap ?? undefined}
       metalnessMap={maps?.metalnessMap ?? undefined}
       aoMap={maps?.aoMap ?? undefined}
+      displacementMap={maps?.displacementMap ?? undefined}
+      displacementScale={
+        maps?.displacementMap
+          ? (material?.displacementScale ?? DEFAULT_DISPLACEMENT_SCALE)
+          : 0
+      }
       normalScale={
         maps?.normalMap ? new THREE.Vector2(0.85, 0.85) : undefined
       }

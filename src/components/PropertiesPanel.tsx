@@ -26,6 +26,7 @@ import { grassLayers } from '../landscape/grassLayers'
 import { ConstraintsList } from './ConstraintsList'
 import { CopyFloorOptionsForm } from './CopyFloorOptionsForm'
 import { MaterialSlot } from './TextureBrowser'
+import { ObjectTextureEditor } from './ObjectTextureEditor'
 import {
   detectRooms,
   roomsForWallSides,
@@ -1086,6 +1087,13 @@ export function PropertiesPanel() {
             Drag — перемещение. Двойной клик по объекту — смена режима gizmo
             (двигать / вращать / масштаб).
           </p>
+          <ObjectTextureEditor
+            objectId={placedObject.id}
+            appearance={placedObject.appearance}
+            onChange={(appearance) =>
+              updatePlacedObject(placedObject.id, { appearance })
+            }
+          />
         </section>
       )}
 

@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { SculptMode, Tool } from '../engine/types'
-import { materialRefFromAsset } from '../materials/ambientcg'
-import { useAmbientcgSearch } from '../materials/useAmbientcgSearch'
-import { ambientcgThumbnailUrl } from '../materials/ambientcg'
+import type { MaterialRef, SculptMode, Tool } from '../engine/types'
+import { TextureSourceTabs } from './CustomTextureLibrary'
+import { useMaterialThumb } from './TextureBrowser'
 import { LAYER_FALLBACK_HEX } from '../landscape/splatMaterial'
 import {
   SPECIES_GROUP_LABELS,
@@ -37,6 +36,12 @@ const sculptModes: { id: SculptMode; label: string }[] = [
   { id: 'smooth', label: 'Сгладить' },
   { id: 'flatten', label: 'Выровнять' },
 ]
+
+function LandscapeLayerThumb({ value }: { value: MaterialRef }) {
+  const thumb = useMaterialThumb(value)
+  if (!thumb) return null
+  return <img src={thumb} alt="" referrerPolicy="no-referrer" />
+}
 
 export function LandscapeWorkbench() {
   const tool = useBuildingStore((s) => s.tool)
@@ -76,10 +81,6 @@ export function LandscapeWorkbench() {
   const setPendingModel = useBuildingStore((s) => s.setPendingModel)
   const setModelBrowserOpen = useBuildingStore((s) => s.setModelBrowserOpen)
   const pendingModel = useBuildingStore((s) => s.pendingModel)
-
-  const [query, setQuery] = useState('grass')
-  const [draft, setDraft] = useState('grass')
-  const search = useAmbientcgSearch(query)
 
   const [folders, setFolders] = useState<CollectionFolder[]>([])
   const [items, setItems] = useState<CollectionItem[]>([])
@@ -215,11 +216,7 @@ export function LandscapeWorkbench() {
                   onClick={() => setLayer(i)}
                 >
                   {ref ? (
-                    <img
-                      src={ambientcgThumbnailUrl(ref.assetId, 128)}
-                      alt=""
-                      referrerPolicy="no-referrer"
-                    />
+                    <LandscapeLayerThumb value={ref} />
                   ) : (
                     <span
                       className="landscape-layer-fallback"
@@ -233,35 +230,12 @@ export function LandscapeWorkbench() {
             })}
           </div>
           <p className="hint">ЛКМ — слой · Alt — стереть в базу</p>
-          <form
-            className="tex-search"
-            onSubmit={(e) => {
-              e.preventDefault()
-              setQuery(draft.trim())
-            }}
-          >
-            <input
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              placeholder="Поиск текстур"
-            />
-            <button type="submit">Найти</button>
-          </form>
-          <div className="tex-grid paint-tex-grid">
-            {search.assets.map((a) => (
-              <button
-                key={a.id}
-                type="button"
-                className="tex-card"
-                onClick={() =>
-                  setLayerMat(layer, materialRefFromAsset(a))
-                }
-              >
-                <img src={a.thumbnailUrl} alt="" loading="lazy" referrerPolicy="no-referrer" />
-                <span>{a.title}</span>
-              </button>
-            ))}
-          </div>
+          <TextureSourceTabs
+            selected={paint?.layers[layer]}
+            onSelect={(ref) => setLayerMat(layer, ref)}
+            defaultQuery="grass"
+            gridClassName="tex-grid paint-tex-grid"
+          />
         </>
       )}
 
@@ -317,7 +291,7 @@ export function LandscapeWorkbench() {
 
       {tool === 'plant' && (
         <>
-          {(['conifer', 'deciduous', 'fruit', 'shrub', 'flower'] as PlantGroup[]).map((group) => {
+          {(['conifer', 'deciduous', 'fruit', 'shrub', 'trellis', 'flower'] as PlantGroup[]).map((group) => {
             const items = listSpecies().filter((sp) => sp.group === group)
             if (items.length === 0) return null
             return (

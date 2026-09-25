@@ -75,6 +75,7 @@ describe('buildRoomFloorGeometry stair holes', () => {
     ]
     const geo = buildRoomFloorGeometry(room, 0, { holes: [stair] })
     expect(geo).not.toBeNull()
+    expect(geo!.attributes.position.count).toBeGreaterThan(8)
     // world Z = −planY
     expect(geometryCoversXZ(geo!, 2, -2)).toBe(false)
     expect(geometryCoversXZ(geo!, 0.5, -0.5)).toBe(true)

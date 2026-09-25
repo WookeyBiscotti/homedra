@@ -8,9 +8,11 @@ import type {
 } from '../engine/types'
 import {
   applyTileRepeat,
+  DEFAULT_DISPLACEMENT_SCALE,
   loadPbrMaps,
   type LoadedPbrMaps,
 } from '../materials/ambientcg'
+import { materialCacheKey } from '../materials/customTextures'
 
 /** Native PBR sample for editor fallbacks. */
 export type PbrSample = {
@@ -23,6 +25,7 @@ export type PbrSample = {
   envMapIntensity?: number
   normalScale?: number
   aoMapIntensity?: number
+  displacementScale?: number
 }
 
 export type SceneMaterialInfo = {
@@ -44,6 +47,7 @@ type ColorCapable = THREE.Material & {
   roughnessMap?: THREE.Texture | null
   metalnessMap?: THREE.Texture | null
   aoMap?: THREE.Texture | null
+  displacementMap?: THREE.Texture | null
   roughness?: number
   metalness?: number
   opacity?: number
@@ -51,6 +55,7 @@ type ColorCapable = THREE.Material & {
   aoMapIntensity?: number
   envMapIntensity?: number
   normalScale?: THREE.Vector2
+  displacementScale?: number
   needsUpdate?: boolean
 }
 
@@ -65,6 +70,7 @@ type OrigSnapshot = {
   roughnessMap?: THREE.Texture | null
   metalnessMap?: THREE.Texture | null
   aoMap?: THREE.Texture | null
+  displacementMap?: THREE.Texture | null
   roughness?: number
   metalness?: number
   opacity?: number
@@ -73,6 +79,7 @@ type OrigSnapshot = {
   envMapIntensity?: number
   normalScaleX?: number
   normalScaleY?: number
+  displacementScale?: number
 }
 
 const PBR_KEYS: (keyof ObjectMaterialOverride)[] = [
@@ -86,6 +93,7 @@ const PBR_KEYS: (keyof ObjectMaterialOverride)[] = [
   'envMapIntensity',
   'normalScale',
   'aoMapIntensity',
+  'displacementScale',
 ]
 
 function asMats(mat: THREE.Material | THREE.Material[]): THREE.Material[] {
@@ -123,6 +131,9 @@ function sampleFromMat(mat: THREE.Material): PbrSample {
   if (m.envMapIntensity !== undefined) sample.envMapIntensity = m.envMapIntensity
   if (m.normalScale) sample.normalScale = m.normalScale.x
   if (m.aoMapIntensity !== undefined) sample.aoMapIntensity = m.aoMapIntensity
+  if (m.displacementMap && m.displacementScale !== undefined) {
+    sample.displacementScale = m.displacementScale
+  }
   return sample
 }
 
@@ -182,6 +193,7 @@ function rememberOrig(mat: ColorCapable): OrigSnapshot {
     roughnessMap: mat.roughnessMap ?? null,
     metalnessMap: mat.metalnessMap ?? null,
     aoMap: mat.aoMap ?? null,
+    displacementMap: mat.displacementMap ?? null,
     roughness: mat.roughness,
     metalness: mat.metalness,
     opacity: mat.opacity,
@@ -190,6 +202,7 @@ function rememberOrig(mat: ColorCapable): OrigSnapshot {
     envMapIntensity: mat.envMapIntensity,
     normalScaleX: mat.normalScale?.x,
     normalScaleY: mat.normalScale?.y,
+    displacementScale: mat.displacementScale,
   }
   mat.userData = { ...mat.userData, [ORIG_KEY]: snap }
   return snap
@@ -206,6 +219,7 @@ function restoreOrig(mat: ColorCapable, snap: OrigSnapshot): void {
   if ('roughnessMap' in mat) mat.roughnessMap = snap.roughnessMap ?? null
   if ('metalnessMap' in mat) mat.metalnessMap = snap.metalnessMap ?? null
   if ('aoMap' in mat) mat.aoMap = snap.aoMap ?? null
+  if ('displacementMap' in mat) mat.displacementMap = snap.displacementMap ?? null
   if (snap.roughness !== undefined) mat.roughness = snap.roughness
   if (snap.metalness !== undefined) mat.metalness = snap.metalness
   if (snap.opacity !== undefined) mat.opacity = snap.opacity
@@ -219,6 +233,9 @@ function restoreOrig(mat: ColorCapable, snap: OrigSnapshot): void {
       snap.normalScaleX,
       snap.normalScaleY ?? snap.normalScaleX,
     )
+  }
+  if (snap.displacementScale !== undefined) {
+    mat.displacementScale = snap.displacementScale
   }
   mat.needsUpdate = true
 }
@@ -250,16 +267,80 @@ function resolveOverride(
   return out
 }
 
-function applyMapsToMat(mat: ColorCapable, maps: LoadedPbrMaps): void {
+function isStandardMaterial(
+  mat: THREE.Material,
+): mat is THREE.MeshStandardMaterial {
+  return (mat as THREE.MeshStandardMaterial).isMeshStandardMaterial === true
+}
+
+function replaceMeshMaterial(
+  mesh: THREE.Mesh,
+  prev: THREE.Material,
+  next: THREE.Material,
+): void {
+  if (Array.isArray(mesh.material)) {
+    mesh.material = mesh.material.map((m) => (m === prev ? next : m))
+  } else {
+    mesh.material = next
+  }
+}
+
+/** GLB Lambert/Basic materials ignore roughness / metalness / normal maps. */
+function upgradeToStandard(mesh: THREE.Mesh, mat: THREE.Material): ColorCapable {
+  if (isStandardMaterial(mat)) return mat
+  const src = mat as ColorCapable
+  const std = new THREE.MeshStandardMaterial({
+    name: mat.name,
+    color: src.color?.clone() ?? new THREE.Color('#ffffff'),
+    map: src.map ?? null,
+    opacity: mat.opacity,
+    transparent: mat.transparent,
+    side: mat.side,
+    emissive: src.emissive?.clone(),
+    emissiveIntensity: src.emissiveIntensity ?? 0,
+  })
+  std.userData = { ...mat.userData }
+  replaceMeshMaterial(mesh, mat, std)
+  return std
+}
+
+function ensureUv2(root: THREE.Object3D): void {
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh
+    if (!mesh.isMesh || !mesh.geometry) return
+    const geo = mesh.geometry
+    const uv = geo.getAttribute('uv')
+    if (uv && !geo.getAttribute('uv2')) {
+      geo.setAttribute('uv2', uv)
+    }
+  })
+}
+
+function applyMapsToMat(
+  mat: ColorCapable,
+  maps: LoadedPbrMaps,
+  ref?: MaterialRef,
+): void {
   if (!('map' in mat)) return
   mat.map = maps.map ?? null
   mat.normalMap = maps.normalMap ?? null
   mat.roughnessMap = maps.roughnessMap ?? null
   mat.metalnessMap = maps.metalnessMap ?? null
   mat.aoMap = maps.aoMap ?? null
+  mat.displacementMap = maps.displacementMap ?? null
+  // Maps multiply with these scalars — 1 lets the texture drive the channel.
   if (maps.roughnessMap) mat.roughness = 1
   if (maps.metalnessMap) mat.metalness = 1
   if (maps.aoMap) mat.aoMapIntensity = 1
+  if (maps.normalMap) {
+    const scale = mat.normalScale ?? new THREE.Vector2(1, 1)
+    if (scale.x === 0 && scale.y === 0) scale.set(1, 1)
+    mat.normalScale = scale
+  }
+  if (maps.displacementMap) {
+    mat.displacementScale =
+      ref?.displacementScale ?? DEFAULT_DISPLACEMENT_SCALE
+  }
   mat.envMapIntensity = 0.75
   // Map multiplies with color — keep white unless tinted.
   if (mat.color && maps.map) mat.color.set('#ffffff')
@@ -291,6 +372,11 @@ function applyPbrScalars(mat: ColorCapable, ov: ObjectMaterialOverride): void {
   if (ov.aoMapIntensity !== undefined && 'aoMapIntensity' in mat) {
     mat.aoMapIntensity = ov.aoMapIntensity
   }
+  const displacement =
+    ov.displacementScale ?? ov.material?.displacementScale
+  if (displacement !== undefined && 'displacementScale' in mat) {
+    mat.displacementScale = displacement
+  }
   mat.needsUpdate = true
 }
 
@@ -306,7 +392,8 @@ export function overrideHasValues(ov: ObjectMaterialOverride): boolean {
     ov.opacity !== undefined ||
     ov.envMapIntensity !== undefined ||
     ov.normalScale !== undefined ||
-    ov.aoMapIntensity !== undefined
+    ov.aoMapIntensity !== undefined ||
+    ov.displacementScale !== undefined
   )
 }
 
@@ -324,6 +411,9 @@ function pruneOverride(ov: ObjectMaterialOverride): ObjectMaterialOverride | und
   if (ov.envMapIntensity !== undefined) next.envMapIntensity = ov.envMapIntensity
   if (ov.normalScale !== undefined) next.normalScale = ov.normalScale
   if (ov.aoMapIntensity !== undefined) next.aoMapIntensity = ov.aoMapIntensity
+  if (ov.displacementScale !== undefined) {
+    next.displacementScale = ov.displacementScale
+  }
   return overrideHasValues(next) ? next : undefined
 }
 
@@ -362,6 +452,7 @@ export function applyAppearanceToObject(
   pbrByAssetId: Map<string, LoadedPbrMaps> = new Map(),
 ): void {
   detachSharedMaterials(root)
+  ensureUv2(root)
   let auto = 0
   const seen = new Map<THREE.Material, string>()
   const used = new Set<string>()
@@ -370,7 +461,7 @@ export function applyAppearanceToObject(
     const mesh = obj as THREE.Mesh
     if (!mesh.isMesh || !mesh.material) return
     for (const raw of asMats(mesh.material)) {
-      const mat = raw as ColorCapable
+      let mat = raw as ColorCapable
       let id = seen.get(raw)
       if (!id) {
         id = materialId(raw, auto, used)
@@ -384,10 +475,12 @@ export function applyAppearanceToObject(
       restoreOrig(mat, snap)
 
       if (ov.material) {
-        const maps = pbrByAssetId.get(ov.material.assetId)
+        const maps = pbrByAssetId.get(materialCacheKey(ov.material))
         if (maps) {
+          mat = upgradeToStandard(mesh, mat)
+          if (!seen.has(mat)) seen.set(mat, id)
           applyTileRepeat(maps, ov.material.tileSizeM, 1, 1)
-          applyMapsToMat(mat, maps)
+          applyMapsToMat(mat, maps, ov.material)
         }
       }
 
@@ -404,12 +497,13 @@ export async function loadAppearanceMaps(
   const refs = appearanceMaterialRefs(appearance)
   await Promise.all(
     refs.map(async (ref) => {
-      if (map.has(ref.assetId)) return
+      const key = materialCacheKey(ref)
+      if (map.has(key)) return
       try {
         const loaded = await loadPbrMaps(ref)
-        map.set(ref.assetId, loaded)
+        map.set(key, loaded)
       } catch (err) {
-        console.warn('[appearance] PBR load failed', ref.assetId, err)
+        console.warn('[appearance] PBR load failed', key, err)
       }
     }),
   )
@@ -450,4 +544,23 @@ export function takeOverrideFields(
     }
   }
   return next
+}
+
+/** Set or clear a texture on the whole object or one material slot. */
+export function setAppearanceMaterial(
+  appearance: ObjectAppearance | undefined,
+  material: MaterialRef | null,
+  slotId?: string,
+): ObjectAppearance | undefined {
+  if (!slotId) {
+    return pruneAppearance({ ...appearance, material })
+  }
+  const prevSlot = appearance?.slots?.[slotId] ?? {}
+  const nextSlot: ObjectMaterialOverride = { ...prevSlot }
+  if (material) nextSlot.material = material
+  else delete nextSlot.material
+  const slots = { ...appearance?.slots }
+  if (Object.keys(nextSlot).length === 0) delete slots[slotId]
+  else slots[slotId] = nextSlot
+  return pruneAppearance({ ...appearance, slots })
 }
