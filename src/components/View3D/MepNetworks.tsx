@@ -21,6 +21,7 @@ import { wallAxes } from '../../engine/geometry/wallSolid'
 import {
   devicePlanPoint,
   nodePlanPoint,
+  wallAnchor,
   wallNodeWorldY,
   type MepNodeLike,
 } from '../../engine/geometry/mep'
@@ -33,7 +34,8 @@ function worldOf(floor: Floor, node: MepNodeLike) {
 }
 
 function deviceWorldPose(floor: Floor, node: ElectricalNode) {
-  if (!node.device || node.anchor.type !== 'wall') {
+  const onWall = wallAnchor(node.anchor)
+  if (!node.device || !onWall) {
     const w = worldOf(floor, node)
     if (!w) return null
     const size = electricalDeviceSize(node)
@@ -43,7 +45,7 @@ function deviceWorldPose(floor: Floor, node: ElectricalNode) {
       size,
     }
   }
-  const wall = floor.walls.find((w) => w.id === node.anchor.wallId)
+  const wall = floor.walls.find((w) => w.id === onWall.wallId)
   const axes = wall ? wallAxes(floor, wall) : null
   const p = devicePlanPoint(floor, node)
   if (!wall || !axes || !p) return null
@@ -200,7 +202,8 @@ function DraggableMepNode({
     dragging.current = true
     beginMepNodeDrag()
     onSelect()
-    e.target.setPointerCapture?.(e.pointerId)
+    const target = e.target as { setPointerCapture?: (id: number) => void } | null
+    target?.setPointerCapture?.(e.pointerId)
   }
 
   const onPointerMove = (e: ThreeEvent<PointerEvent>) => {
@@ -212,8 +215,9 @@ function DraggableMepNode({
         : ensureCableNetwork(useBuildingStore.getState().activeFloor().cables)
     const node = net.nodes.find((n) => n.id === nodeId)
     const hit = new THREE.Vector3()
-    if (node?.anchor.type === 'wall') {
-      const wall = floor.walls.find((w) => w.id === node.anchor.wallId)
+    const onWall = node ? wallAnchor(node.anchor) : null
+    if (onWall) {
+      const wall = floor.walls.find((w) => w.id === onWall.wallId)
       const ends = wall ? wallEndpoints(floor, wall) : null
       if (ends && ends.len > 1e-6) {
         const ux = (ends.b.x - ends.a.x) / ends.len

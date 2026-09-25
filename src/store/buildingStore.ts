@@ -1860,26 +1860,30 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     selectAt: (x, y) => {
       const floor = get().activeFloor()
       if (isMepWorkbench(get().workbench)) {
-        const plumbing = get().workbench === 'plumbing'
-        const net = plumbing
-          ? ensurePipeNetwork(floor.pipes)
-          : ensureCableNetwork(floor.cables)
+        if (get().workbench === 'plumbing') {
+          const net = ensurePipeNetwork(floor.pipes)
+          const node = findMepNodeNear(floor, net.nodes, x, y)
+          if (node) {
+            set({ selection: { kind: 'pipeNode', id: node.id } })
+            return
+          }
+          const hit = findMepSegmentNear(floor, net.nodes, net.segments, x, y)
+          if (hit) {
+            set({ selection: { kind: 'pipeSegment', id: hit.segment.id } })
+            return
+          }
+          set({ selection: null })
+          return
+        }
+        const net = ensureCableNetwork(floor.cables)
         const node = findMepNodeNear(floor, net.nodes, x, y)
         if (node) {
-          set({
-            selection: plumbing
-              ? { kind: 'pipeNode', id: node.id }
-              : { kind: 'electricalNode', id: node.id },
-          })
+          set({ selection: { kind: 'electricalNode', id: node.id } })
           return
         }
         const hit = findMepSegmentNear(floor, net.nodes, net.segments, x, y)
         if (hit) {
-          set({
-            selection: plumbing
-              ? { kind: 'pipeSegment', id: hit.segment.id }
-              : { kind: 'cableSegment', id: hit.segment.id },
-          })
+          set({ selection: { kind: 'cableSegment', id: hit.segment.id } })
           return
         }
         set({ selection: null })

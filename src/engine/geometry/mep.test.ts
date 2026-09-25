@@ -262,11 +262,10 @@ describe('mep', () => {
     expect(copied.pipes?.segments).toHaveLength(1)
     const wallNode = copied.pipes!.nodes.find((n) => n.anchor.type === 'wall')
     expect(wallNode?.anchor.type).toBe('wall')
-    if (wallNode?.anchor.type === 'wall') {
-      expect(copied.walls.some((w) => w.id === wallNode.anchor.wallId)).toBe(
-        true,
-      )
-      expect(wallNode.anchor.wallId).not.toBe('w1')
+    const wallAnchor = wallNode?.anchor
+    if (wallAnchor?.type === 'wall') {
+      expect(copied.walls.some((w) => w.id === wallAnchor.wallId)).toBe(true)
+      expect(wallAnchor.wallId).not.toBe('w1')
     }
     expect(copied.pipes!.nodes[0].id).not.toBe(a.id)
   })

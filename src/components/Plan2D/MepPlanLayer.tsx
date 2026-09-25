@@ -131,7 +131,7 @@ export function MepPlanLayer({
         : ensureCableNetwork(useBuildingStore.getState().activeFloor().cables)
     const node = net.nodes.find((n) => n.id === id)
     const p = node
-      ? node.device
+      ? 'device' in node && node.device
         ? devicePlanPoint(floor, node)
         : mepPoint(floor, node.anchor)
       : null

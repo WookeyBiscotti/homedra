@@ -34,6 +34,12 @@ const XY_EPS = 0.04
 
 export type MepNetworkKey = 'pipes' | 'cables'
 
+export type WallAnchor = Extract<MepAnchor, { type: 'wall' }>
+
+export function wallAnchor(anchor: MepAnchor): WallAnchor | null {
+  return anchor.type === 'wall' ? anchor : null
+}
+
 export interface MepNodeLike {
   id: Id
   anchor: MepAnchor
@@ -85,8 +91,9 @@ export function relocateMepNode<N extends MepNodeLike>(
     'device' in node && Boolean((node as { device?: unknown }).device)
   const elev = elevation ?? node.elevation
 
-  if (node.anchor.type === 'wall') {
-    const wall = floor.walls.find((w) => w.id === node.anchor.wallId)
+  const onWall = wallAnchor(node.anchor)
+  if (onWall) {
+    const wall = floor.walls.find((w) => w.id === onWall.wallId)
     if (wall) {
       const ends = wallEndpoints(floor, wall)
       if (ends && ends.len > 1e-9) {
@@ -226,10 +233,11 @@ export function devicePlanPoint(
   floor: Floor,
   node: ElectricalNode,
 ): { x: number; y: number } | null {
-  if (node.anchor.type !== 'wall' || !node.device) {
+  const onWall = wallAnchor(node.anchor)
+  if (!onWall || !node.device) {
     return mepPoint(floor, node.anchor)
   }
-  const wall = floor.walls.find((w) => w.id === node.anchor.wallId)
+  const wall = floor.walls.find((w) => w.id === onWall.wallId)
   const p = mepPoint(floor, node.anchor)
   const axes = wall ? wallAxes(floor, wall) : null
   if (!wall || !p || !axes) return p
@@ -409,7 +417,7 @@ function wallsShareVertex(
 }
 
 function findExistingNode<N extends MepNodeLike>(
-  floor: Floor,
+  _floor: Floor,
   nodes: N[],
   anchor: MepAnchor,
   elevation: number | undefined,
@@ -422,9 +430,11 @@ function findExistingNode<N extends MepNodeLike>(
       }
       continue
     }
-    if (n.anchor.type !== 'wall') continue
-    if (n.anchor.wallId !== anchor.wallId) continue
-    if (Math.abs(n.anchor.offset - anchor.offset) > XY_EPS) continue
+    const nodeWall = wallAnchor(n.anchor)
+    const targetWall = wallAnchor(anchor)
+    if (!nodeWall || !targetWall) continue
+    if (nodeWall.wallId !== targetWall.wallId) continue
+    if (Math.abs(nodeWall.offset - targetWall.offset) > XY_EPS) continue
     const e = elevation ?? SLAB_CONNECT_ELEVATION
     if (Math.abs(elevOf(n) - e) <= ELEV_EPS) return n
   }
@@ -560,13 +570,11 @@ export function splitMepSegment<
 
   let anchor: MepAnchor
   let nodeElev: number | undefined
-  if (
-    a.anchor.type === 'wall' &&
-    b.anchor.type === 'wall' &&
-    a.anchor.wallId === b.anchor.wallId
-  ) {
-    const off = a.anchor.offset + (b.anchor.offset - a.anchor.offset) * proj.t
-    anchor = { type: 'wall', wallId: a.anchor.wallId, offset: off }
+  const aWall = wallAnchor(a.anchor)
+  const bWall = wallAnchor(b.anchor)
+  if (aWall && bWall && aWall.wallId === bWall.wallId) {
+    const off = aWall.offset + (bWall.offset - aWall.offset) * proj.t
+    anchor = { type: 'wall', wallId: aWall.wallId, offset: off }
     nodeElev = elevOf(a) + (elevOf(b) - elevOf(a)) * proj.t
   } else if (a.anchor.type === 'slab' && b.anchor.type === 'slab') {
     anchor = { type: 'slab', x: proj.x, y: proj.y }
@@ -638,13 +646,15 @@ export function connectMepNodes<
     nextSegs = pushSegment(nextSegs, a, b, makeSegment)
   }
 
-  if (from.anchor.type === 'wall' && to.anchor.type === 'wall') {
-    if (from.anchor.wallId === to.anchor.wallId) {
+  const fromWall = wallAnchor(from.anchor)
+  const toWall = wallAnchor(to.anchor)
+  if (fromWall && toWall) {
+    if (fromWall.wallId === toWall.wallId) {
       link(from.id, to.id)
       return { nodes: nextNodes, segments: nextSegs }
     }
-    const wallA = floor.walls.find((w) => w.id === from.anchor.wallId)
-    const wallB = floor.walls.find((w) => w.id === to.anchor.wallId)
+    const wallA = floor.walls.find((w) => w.id === fromWall.wallId)
+    const wallB = floor.walls.find((w) => w.id === toWall.wallId)
     if (wallA && wallB) {
       const shared = wallsShareVertex(floor, wallA, wallB)
       if (shared) {
@@ -653,7 +663,7 @@ export function connectMepNodes<
           nextNodes,
           {
             type: 'wall',
-            wallId: from.anchor.wallId,
+            wallId: fromWall.wallId,
             offset: shared.offsetA,
           },
           elevOf(from),
@@ -761,16 +771,18 @@ export function previewMepPath(
   const a = nodePlanPoint(floor, from)
   const b = mepPoint(floor, toAnchor)
   if (!a || !b) return []
-  if (from.anchor.type === 'wall' && toAnchor.type === 'wall') {
-    if (from.anchor.wallId === toAnchor.wallId) return [a, b]
-    const wallA = floor.walls.find((w) => w.id === from.anchor.wallId)
-    const wallB = floor.walls.find((w) => w.id === toAnchor.wallId)
+  const fromWall = wallAnchor(from.anchor)
+  const toWall = wallAnchor(toAnchor)
+  if (fromWall && toWall) {
+    if (fromWall.wallId === toWall.wallId) return [a, b]
+    const wallA = floor.walls.find((w) => w.id === fromWall.wallId)
+    const wallB = floor.walls.find((w) => w.id === toWall.wallId)
     if (wallA && wallB) {
       const shared = wallsShareVertex(floor, wallA, wallB)
       if (shared) {
         const corner = mepPoint(floor, {
           type: 'wall',
-          wallId: from.anchor.wallId,
+          wallId: fromWall.wallId,
           offset: shared.offsetA,
         })
         if (corner) return [a, corner, b]
@@ -786,10 +798,12 @@ export function segmentEmbed(
   a: MepNodeLike,
   b: MepNodeLike,
 ): 'wall' | 'slab' | 'mixed' {
-  if (a.anchor.type === 'wall' && b.anchor.type === 'wall') {
-    if (a.anchor.wallId === b.anchor.wallId) return 'wall'
-    const wallA = floor.walls.find((w) => w.id === a.anchor.wallId)
-    const wallB = floor.walls.find((w) => w.id === b.anchor.wallId)
+  const aWall = wallAnchor(a.anchor)
+  const bWall = wallAnchor(b.anchor)
+  if (aWall && bWall) {
+    if (aWall.wallId === bWall.wallId) return 'wall'
+    const wallA = floor.walls.find((w) => w.id === aWall.wallId)
+    const wallB = floor.walls.find((w) => w.id === bWall.wallId)
     if (wallA && wallB && wallsShareVertex(floor, wallA, wallB)) return 'wall'
     return 'slab'
   }
@@ -912,7 +926,7 @@ export function copyCableNetwork(
 }
 
 function reassignNodesAfterSplit<N extends MepNodeLike>(
-  floor: Floor,
+  _floor: Floor,
   nodes: N[],
   oldWallId: Id,
   wall1: Wall,
