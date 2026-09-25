@@ -19,6 +19,10 @@ import {
 import { selectedVertexIds, selectedWallIds, openingKindLabel, slabOpeningKindLabel, isGroundFloor, isStoryFloor, wallLength, PIPE_MEDIUM_META, electricalDeviceLabel, electricalDeviceSize, ensureCableNetwork, ensurePipeNetwork, pipeFixtureLabel, pipeMediumLabel, type PipeMedium, type WallSide } from '../engine/types'
 import { segmentEmbed, segmentLength } from '../engine/geometry/mep'
 import { useBuildingStore } from '../store/buildingStore'
+import { resolvePlantShape } from '../landscape/plantShape'
+import { speciesByKey } from '../landscape/species'
+import { GrassFields, GrassTypeList, PlantShapeFields } from './LandscapeSettings'
+import { grassLayers } from '../landscape/grassLayers'
 import { ConstraintsList } from './ConstraintsList'
 import { CopyFloorOptionsForm } from './CopyFloorOptionsForm'
 import { MaterialSlot } from './TextureBrowser'
@@ -79,6 +83,7 @@ export function PropertiesPanel() {
   const isFurnish = workbench === 'furnish'
   const isPlumbing = workbench === 'plumbing'
   const isElectrical = workbench === 'electrical'
+  const isLandscape = workbench === 'landscape'
 
   const stories = building.floors.filter(isStoryFloor)
   const ground = building.floors.find(isGroundFloor)
@@ -113,6 +118,24 @@ export function PropertiesPanel() {
     selection?.kind === 'object'
       ? (floor.objects ?? []).find((o) => o.id === selection.id)
       : null
+  const plant =
+    selection?.kind === 'plant'
+      ? (ground?.plants ?? []).find((p) => p.id === selection.id) ?? null
+      : null
+  const updatePlant = useBuildingStore((s) => s.updatePlant)
+  const setGrassParams = useBuildingStore((s) => s.setGrassParams)
+  const grassDensity = useBuildingStore((s) => s.grassDensity)
+  const grassHeight = useBuildingStore((s) => s.grassTuftHeight)
+  const grassWidth = useBuildingStore((s) => s.grassTuftWidth)
+  const grassColor = useBuildingStore((s) => s.grassColor)
+  const grassSeed = useBuildingStore((s) => s.grassSeed)
+  const grassTypeLayers = grassLayers(ground?.landscapeGrass)
+  const activeGrassLayerId = useBuildingStore((s) => s.activeGrassLayerId)
+  const setActiveGrassLayer = useBuildingStore((s) => s.setActiveGrassLayer)
+  const addGrassLayer = useBuildingStore((s) => s.addGrassLayer)
+  const removeGrassLayer = useBuildingStore((s) => s.removeGrassLayer)
+  const activeGrass =
+    grassTypeLayers.find((l) => l.id === activeGrassLayerId) ?? grassTypeLayers[0]
   const room =
     selection?.kind === 'room'
       ? detectRooms(floor).find((r) => r.key === selection.key) ?? null
@@ -250,7 +273,9 @@ export function PropertiesPanel() {
               ? 'Трубы'
               : isElectrical
                 ? 'Электрика'
-                : 'Свойства'}
+                : isLandscape
+                  ? 'Ландшафт'
+                  : 'Свойства'}
       </h2>
 
       {(conflict || statusMessage) && (
@@ -660,13 +685,100 @@ export function PropertiesPanel() {
         </p>
       )}
 
+      {isLandscape && !placedObject && !plant && (
+        <section className="prop-section">
+          <h3>Трава</h3>
+          <p className="muted">
+            Несколько типов травы — каждый красится в своём месте. Кликните дерево в 3D.
+          </p>
+          <GrassTypeList
+            layers={grassTypeLayers}
+            activeId={activeGrass?.id ?? activeGrassLayerId}
+            onSelect={setActiveGrassLayer}
+            onAdd={addGrassLayer}
+            onRemove={removeGrassLayer}
+          />
+          <GrassFields
+            name={activeGrass?.name ?? 'Луг'}
+            density={grassDensity}
+            height={grassHeight}
+            width={grassWidth}
+            color={grassColor}
+            seed={grassSeed}
+            onChange={setGrassParams}
+          />
+        </section>
+      )}
+
+      {isLandscape && plant && (
+        <section className="prop-section">
+          <h3>Растение</h3>
+          <p className="muted">
+            {speciesByKey(plant.species).name}
+            <span> · </span>
+            <em>{speciesByKey(plant.species).latin}</em>
+          </p>
+          <label>
+            Seed
+            <input
+              type="number"
+              min={1}
+              max={9999}
+              step={1}
+              value={plant.seed}
+              onChange={(e) =>
+                updatePlant(plant.id, {
+                  seed: Math.max(1, Math.round(Number(e.target.value) || 1)),
+                })
+              }
+            />
+          </label>
+          <label>
+            X, м
+            <input
+              type="number"
+              step={0.05}
+              value={plant.x}
+              onChange={(e) => updatePlant(plant.id, { x: Number(e.target.value) })}
+            />
+          </label>
+          <label>
+            Y (план), м
+            <input
+              type="number"
+              step={0.05}
+              value={plant.y}
+              onChange={(e) => updatePlant(plant.id, { y: Number(e.target.value) })}
+            />
+          </label>
+          <label>
+            Масштаб посадки
+            <input
+              type="number"
+              min={0.2}
+              max={4}
+              step={0.05}
+              value={plant.scale}
+              onChange={(e) =>
+                updatePlant(plant.id, { scale: Math.max(0.2, Number(e.target.value) || 1) })
+              }
+            />
+          </label>
+          <PlantShapeFields
+            value={resolvePlantShape(plant.species, plant.shape)}
+            onChange={(patch) => updatePlant(plant.id, { shape: patch })}
+          />
+        </section>
+      )}
+
       {isFurnish && !placedObject && (
         <p className="muted">
           Выберите объект на плане или в 3D, либо поставьте новый из каталога.
         </p>
       )}
 
-      {!isGround && (isDraft || isPaint || isFurnish) && (
+      {((!isGround && (isDraft || isPaint || isFurnish)) ||
+        (isLandscape && placedObject)) && (
         <>
       {isDraft && slabOpening && (
         <section className="prop-section">
@@ -810,7 +922,7 @@ export function PropertiesPanel() {
         </section>
       )}
 
-      {isFurnish && placedObject && (
+      {(isFurnish || isLandscape) && placedObject && (
         <section className="prop-section">
           <h3>3D объект</h3>
           <p className="muted">

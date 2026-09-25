@@ -13,6 +13,7 @@ import {
 } from 'react'
 import * as THREE from 'three'
 import type { Floor, ModelRef, PlacedObject } from '../../engine/types'
+import { heightAt } from '../../landscape/terrain'
 import { snapToGrid } from '../../engine/geometry/walls'
 import { snapObjectXY, planHalfSizeOf } from '../../engine/geometry/objectSnap'
 import { resolveModelRef } from '../../models/resolveModel'
@@ -117,8 +118,13 @@ function applyPlacedTransform(
   group: THREE.Object3D,
   obj: PlacedObject,
   floorElevation: number,
+  terrainLift = 0,
 ): void {
-  group.position.set(obj.x, floorElevation + (obj.elevation ?? 0), -obj.y)
+  group.position.set(
+    obj.x,
+    floorElevation + terrainLift + (obj.elevation ?? 0),
+    -obj.y,
+  )
   group.rotation.set(obj.rotationX ?? 0, obj.rotationY, obj.rotationZ ?? 0)
   group.scale.set(obj.scaleX, obj.scaleY, obj.scaleZ)
 }
@@ -128,6 +134,7 @@ function GlbInstance({
   objectId,
   obj,
   floorElevation,
+  terrainLift = 0,
   selected,
   onSelect,
   shadowsEnabled,
@@ -136,6 +143,7 @@ function GlbInstance({
   objectId?: string
   obj: PlacedObject
   floorElevation: number
+  terrainLift?: number
   selected: boolean
   onSelect: () => void
   shadowsEnabled: boolean
@@ -260,14 +268,14 @@ function GlbInstance({
 
   useLayoutEffect(() => {
     if (!groupRef.current || dragging || xyDragging.current) return
-    applyPlacedTransform(groupRef.current, obj, floorElevation)
-  }, [obj, floorElevation, dragging])
+    applyPlacedTransform(groupRef.current, obj, floorElevation, terrainLift)
+  }, [obj, floorElevation, terrainLift, dragging])
 
   // Publish live + persisted plan AABB from the same world box as the 3D helper.
   useLayoutEffect(() => {
     const g = groupRef.current
     if (!g || dragging || xyDragging.current) return
-    applyPlacedTransform(g, obj, floorElevation)
+    applyPlacedTransform(g, obj, floorElevation, terrainLift)
     const box = new THREE.Box3().setFromObject(g)
     if (box.isEmpty()) return
 
@@ -310,7 +318,7 @@ function GlbInstance({
         },
       }
     })
-  }, [obj, floorElevation, scene, dragging])
+  }, [obj, floorElevation, terrainLift, scene, dragging])
 
   useEffect(() => {
     return () => {
@@ -374,7 +382,7 @@ function GlbInstance({
     updatePlacedObject(obj.id, {
       x: px,
       y: py,
-      elevation: Math.max(0, g.position.y - floorElevation),
+      elevation: g.position.y - floorElevation - terrainLift,
       rotationX: g.rotation.x,
       rotationY: g.rotation.y,
       rotationZ: g.rotation.z,
@@ -394,7 +402,7 @@ function GlbInstance({
     e.stopPropagation()
     onSelect()
 
-    const planeY = floorElevation + (obj.elevation ?? 0)
+    const planeY = floorElevation + terrainLift + (obj.elevation ?? 0)
     const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -planeY)
     const hit = new THREE.Vector3()
     const raycaster = new THREE.Raycaster()
@@ -495,15 +503,21 @@ function PlaceholderObject({
   obj,
   floorId,
   floorElevation,
+  terrainLift = 0,
 }: {
   obj: PlacedObject
   floorId: string
   floorElevation: number
+  terrainLift?: number
 }) {
   const selectObject = useBuildingStore((s) => s.selectObject)
   return (
     <mesh
-      position={[obj.x, floorElevation + (obj.elevation ?? 0) + 0.25, -obj.y]}
+      position={[
+        obj.x,
+        floorElevation + terrainLift + (obj.elevation ?? 0) + 0.25,
+        -obj.y,
+      ]}
       onClick={(e) => {
         e.stopPropagation()
         selectObject(floorId, obj.id)
@@ -519,11 +533,13 @@ function ResolvedObject({
   obj,
   floorId,
   floorElevation,
+  terrainLift = 0,
   shadowsEnabled,
 }: {
   obj: PlacedObject
   floorId: string
   floorElevation: number
+  terrainLift?: number
   shadowsEnabled: boolean
 }) {
   const selection = useBuildingStore((s) => s.selection)
@@ -575,6 +591,7 @@ function ResolvedObject({
       obj={obj}
       floorId={floorId}
       floorElevation={floorElevation}
+      terrainLift={terrainLift}
     />
   )
 
@@ -590,6 +607,7 @@ function ResolvedObject({
           objectId={obj.model.objectId}
           obj={obj}
           floorElevation={floorElevation}
+          terrainLift={terrainLift}
           selected={selected}
           onSelect={() => selectObject(floorId, obj.id)}
           shadowsEnabled={shadowsEnabled}
@@ -654,6 +672,11 @@ export function PlacedObjects({
           obj={obj}
           floorId={floor.id}
           floorElevation={floor.elevation}
+          terrainLift={
+            floor.kind === 'ground'
+              ? heightAt(floor.landscapeTerrain, obj.x, obj.y)
+              : 0
+          }
           shadowsEnabled={shadowsEnabled}
         />
       ))}

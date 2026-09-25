@@ -1381,6 +1381,32 @@ export function FloorPlanCanvas() {
             )
           })}
 
+          {(floor.plants ?? []).map((p) => {
+            const selected = selection?.kind === 'plant' && selection.id === p.id
+            const mid = toScreen(p.x, p.y)
+            const r = Math.max(6, 0.6 * p.scale * scale)
+            return (
+              <Circle
+                key={p.id}
+                x={mid.x}
+                y={mid.y}
+                radius={r}
+                fill={
+                  selected
+                    ? 'rgba(45, 120, 62, 0.35)'
+                    : 'rgba(45, 120, 62, 0.18)'
+                }
+                stroke={selected ? '#2d783e' : '#3d6b2e'}
+                strokeWidth={selected ? 2 : 1}
+                onMouseDown={(e) => {
+                  if (e.evt.button !== 0) return
+                  e.cancelBubble = true
+                  setSelection({ kind: 'plant', id: p.id })
+                }}
+              />
+            )
+          })}
+
           {openingDraft &&
             (() => {
               const preview = createOpeningFromDrag(

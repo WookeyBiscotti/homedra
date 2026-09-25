@@ -371,6 +371,93 @@ export interface Floor {
   pipes?: PipeNetwork
   /** Electrical graph (cables + devices). */
   cables?: CableNetwork
+  landscapeTerrain?: LandscapeTerrain
+  landscapePaint?: LandscapePaint
+  plants?: LandscapePlant[]
+  landscapeGrass?: LandscapeGrass
+}
+
+export type SculptMode = 'raise' | 'lower' | 'smooth' | 'flatten'
+
+export interface LandscapePaint {
+  layers: [
+    MaterialRef | null,
+    MaterialRef | null,
+    MaterialRef | null,
+    MaterialRef | null,
+  ]
+  /** RGBA splat (R/G/B = layers 1..3). Base64 of raw bytes or data URL. */
+  splatPng?: string
+  resolution: 256 | 512
+}
+
+/** SeedThree white-oak / controls.js friendly sliders. */
+export interface PlantShape {
+  /** Mature height, metres (`params.scale`, demo default 13). */
+  height: number
+  levels: number
+  /** Weber–Penn crown: 0 conical … 1 spherical … 7 tend flame. */
+  crownShape: number
+  branchDensity: number
+  branchAngle: number
+  gnarliness: number
+  trunks: number
+  trunkThickness: number
+  leafSize: number
+  leavesPerBranch: number
+  leafAngle: number
+  leafStart: number
+  leafSizeVar: number
+  leafAlpha: number
+  showLeaves: boolean
+}
+
+export interface LandscapePlant {
+  id: Id
+  species: string
+  seed: number
+  x: number
+  y: number
+  rotationY: number
+  scale: number
+  shape?: Partial<PlantShape>
+}
+
+/** SeedThree grass.js: height 0.55–1.15, width 1.4–2.1, alphaTest 0.42. */
+export const SEEDTHREE_GRASS_DEFAULTS = {
+  density: 8,
+  height: 0.85,
+  width: 1.75,
+  color: '#6fa83c',
+  seed: 1,
+  alphaTest: 0.42,
+  roughness: 0.95,
+} as const
+
+export interface LandscapeGrassLayer {
+  id: Id
+  name: string
+  coveragePng?: string
+  density: number
+  height: number
+  width: number
+  color: string
+  seed: number
+}
+
+/** One coverage + look per painted type. Legacy single-layer JSON is migrated. */
+export interface LandscapeGrass {
+  resolution: 256 | 512
+  layers: LandscapeGrassLayer[]
+}
+
+export interface LandscapeTerrain {
+  /** Int16 millimetres, little-endian, base64. 0 = ground.elevation. */
+  heightPng?: string
+  resolution: 128 | 256
+  size: number
+  originX: number
+  originY: number
 }
 
 /** Reference to a mesh asset; binaries live outside project JSON. */
@@ -555,6 +642,10 @@ export type Tool =
   | 'outlet'
   | 'switch'
   | 'panel'
+  | 'sculptGround'
+  | 'paintGround'
+  | 'plant'
+  | 'paintGrass'
 
 export type ViewMode = '2d' | '3d'
 export type SceneMode = 'interior' | 'exterior' | 'visit' | 'paint'
@@ -566,8 +657,15 @@ export type SceneMode = 'interior' | 'exterior' | 'visit' | 'paint'
  * - furnish: place / edit 3D objects
  * - plumbing: pipes in walls / slab
  * - electrical: cables, outlets, switches, panels
+ * - landscape: site sculpt, ground paint, plants, grass
  */
-export type Workbench = 'draft' | 'paint' | 'furnish' | 'plumbing' | 'electrical'
+export type Workbench =
+  | 'draft'
+  | 'paint'
+  | 'furnish'
+  | 'plumbing'
+  | 'electrical'
+  | 'landscape'
 
 export const DRAFT_TOOLS: readonly Tool[] = [
   'select',
@@ -601,6 +699,15 @@ export const ELECTRICAL_TOOLS: readonly Tool[] = [
   'panel',
 ]
 
+export const LANDSCAPE_TOOLS: readonly Tool[] = [
+  'select',
+  'sculptGround',
+  'placeObject',
+  'paintGround',
+  'plant',
+  'paintGrass',
+]
+
 export function toolsForWorkbench(workbench: Workbench): readonly Tool[] {
   switch (workbench) {
     case 'draft':
@@ -613,7 +720,23 @@ export function toolsForWorkbench(workbench: Workbench): readonly Tool[] {
       return PLUMBING_TOOLS
     case 'electrical':
       return ELECTRICAL_TOOLS
+    case 'landscape':
+      return LANDSCAPE_TOOLS
   }
+}
+
+export function isLandscapeTool(tool: Tool): boolean {
+  return (
+    tool === 'sculptGround' ||
+    tool === 'paintGround' ||
+    tool === 'plant' ||
+    tool === 'paintGrass' ||
+    tool === 'placeObject'
+  )
+}
+
+export function isLandscapeWorkbench(workbench: Workbench): boolean {
+  return workbench === 'landscape'
 }
 
 export function isPlumbingTool(tool: Tool): boolean {
@@ -709,6 +832,7 @@ export type Selection =
   | { kind: 'slabOpening'; id: Id }
   | { kind: 'floorPlate'; id: Id }
   | { kind: 'object'; id: Id }
+  | { kind: 'plant'; id: Id }
   | { kind: 'pipeSegment'; id: Id }
   | { kind: 'pipeNode'; id: Id }
   | { kind: 'cableSegment'; id: Id }
@@ -947,6 +1071,105 @@ export function recalcFloorElevations(floors: Floor[]): Floor[] {
   })
 }
 
+export function normalizeLandscapeTerrain(
+  raw?: LandscapeTerrain | null,
+): LandscapeTerrain | undefined {
+  if (!raw) return undefined
+  const resolution = raw.resolution === 256 ? 256 : 128
+  const size = Math.max(8, Number(raw.size) || 40)
+  return {
+    heightPng: typeof raw.heightPng === 'string' ? raw.heightPng : undefined,
+    resolution,
+    size,
+    originX: Number(raw.originX) || 0,
+    originY: Number(raw.originY) || 0,
+  }
+}
+
+export function normalizeLandscapePaint(
+  raw?: LandscapePaint | null,
+): LandscapePaint | undefined {
+  if (!raw) return undefined
+  const layers: LandscapePaint['layers'] = [
+    raw.layers?.[0] ?? null,
+    raw.layers?.[1] ?? null,
+    raw.layers?.[2] ?? null,
+    raw.layers?.[3] ?? null,
+  ]
+  return {
+    layers,
+    splatPng: typeof raw.splatPng === 'string' ? raw.splatPng : undefined,
+    resolution: raw.resolution === 512 ? 512 : 256,
+  }
+}
+
+export function normalizeLandscapePlant(
+  raw: LandscapePlant | Partial<LandscapePlant>,
+): LandscapePlant {
+  return {
+    id: raw.id ?? createId('plt'),
+    species: raw.species ?? 'ponderosaPine',
+    seed: Math.max(1, Math.round(Number(raw.seed) || 1)),
+    x: Number(raw.x) || 0,
+    y: Number(raw.y) || 0,
+    rotationY: Number(raw.rotationY) || 0,
+    scale: Math.max(0.15, Number(raw.scale) || 1),
+    shape: raw.shape ? { ...raw.shape } : undefined,
+  }
+}
+
+type LegacyLandscapeGrass = Partial<LandscapeGrassLayer> & {
+  resolution?: 256 | 512
+  layers?: Array<Partial<LandscapeGrassLayer>>
+}
+
+export function normalizeLandscapeGrass(
+  raw?: LandscapeGrass | LegacyLandscapeGrass | null,
+): LandscapeGrass | undefined {
+  if (!raw) return undefined
+  const d = SEEDTHREE_GRASS_DEFAULTS
+  const color = (value?: string) =>
+    typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value)
+      ? value
+      : d.color
+  const layerFrom = (
+    layer: Partial<LandscapeGrassLayer>,
+    fallbackName: string,
+  ): LandscapeGrassLayer => ({
+    id: layer.id ?? createId('grs'),
+    name: (layer.name ?? fallbackName).trim() || fallbackName,
+    coveragePng:
+      typeof layer.coveragePng === 'string' ? layer.coveragePng : undefined,
+    density: Math.max(0.2, Math.min(18, Number(layer.density) || d.density)),
+    height: Math.max(0.15, Math.min(1.8, Number(layer.height) || d.height)),
+    width: Math.max(0.6, Math.min(3.2, Number(layer.width) || d.width)),
+    color: color(layer.color),
+    seed: Math.max(1, Math.round(Number(layer.seed) || d.seed)),
+  })
+  const resolution = raw.resolution === 512 ? 512 : 256
+  if (Array.isArray(raw.layers) && raw.layers.length > 0) {
+    return {
+      resolution,
+      layers: raw.layers.map((layer, i) =>
+        layerFrom(layer, i === 0 ? 'Луг' : `Трава ${i + 1}`),
+      ),
+    }
+  }
+  const legacy = raw as LegacyLandscapeGrass
+  if (
+    legacy.coveragePng ||
+    legacy.density != null ||
+    legacy.height != null ||
+    legacy.color
+  ) {
+    return {
+      resolution,
+      layers: [layerFrom(legacy, 'Луг')],
+    }
+  }
+  return undefined
+}
+
 /**
  * Normalize floors from older JSON: ensure openings/slabOpenings arrays,
  * migrate legacy wall openings with kind `stair` into slab openings.
@@ -1006,6 +1229,10 @@ export function ensureFloorOpenings(floor: Floor): Floor {
     ),
     pipes: ensurePipeNetwork(floor.pipes),
     cables: ensureCableNetwork(floor.cables),
+    landscapeTerrain: normalizeLandscapeTerrain(floor.landscapeTerrain),
+    landscapePaint: normalizeLandscapePaint(floor.landscapePaint),
+    plants: (floor.plants ?? []).map(normalizeLandscapePlant),
+    landscapeGrass: normalizeLandscapeGrass(floor.landscapeGrass),
   }
 }
 

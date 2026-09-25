@@ -51,10 +51,17 @@ import {
   type FloorVisibility,
   isElectricalTool,
   isGroundFloor,
+  isLandscapeTool,
   isMepFixtureTool,
   isMepWorkbench,
   isPlumbingTool,
   isStoryFloor,
+  type LandscapeGrass,
+  type LandscapePlant,
+  normalizeLandscapeGrass,
+  type PlantShape,
+  SEEDTHREE_GRASS_DEFAULTS,
+  type SculptMode,
   type LightingSettings,
   type MaterialRef,
   type ModelAttribution,
@@ -122,6 +129,26 @@ import {
   buildProjectPackage,
   parseImportJson,
 } from '../models/projectPackage'
+import { decodeBytes, decodeHeights, encodeBytes } from '../landscape/maps'
+import { stampCoverage, stampSplat } from '../landscape/paintMaps'
+import { defaultPlantShape, resolvePlantShape } from '../landscape/plantShape'
+import {
+  createGrassLayer,
+  emptyGrassDoc,
+  findGrassLayer,
+  MAX_GRASS_LAYERS,
+  nextGrassPreset,
+  replaceGrassLayer,
+} from '../landscape/grassLayers'
+import {
+  buildLockMask,
+  ensureTerrain,
+  footprintHolesForLock,
+  persistHeights,
+  pointInFootprint,
+  sculptStamp,
+  terrainFrame,
+} from '../landscape/terrain'
 
 const STORAGE_KEY = 'interior-planner-project'
 const MAX_HISTORY = 50
@@ -377,6 +404,62 @@ interface BuildingState {
   /** Drag placed object in plan (no history). */
   dragPlacedObject: (id: string, x: number, y: number) => void
   selectObject: (floorId: string, id: string) => void
+  selectPlant: (id: string) => void
+  placePlantAt: (x: number, y: number) => void
+  updatePlant: (
+    id: string,
+    patch: Partial<
+      Pick<LandscapePlant, 'x' | 'y' | 'rotationY' | 'scale' | 'seed' | 'species'>
+    > & { shape?: Partial<PlantShape> },
+  ) => void
+  sculptMode: SculptMode
+  setSculptMode: (mode: SculptMode) => void
+  landscapeBrushRadius: number
+  landscapeBrushHardness: number
+  landscapeBrushStrength: number
+  setLandscapeBrush: (patch: {
+    radius?: number
+    hardness?: number
+    strength?: number
+  }) => void
+  groundPaintLayer: 0 | 1 | 2 | 3
+  setGroundPaintLayer: (layer: 0 | 1 | 2 | 3) => void
+  setGroundPaintLayerMaterial: (
+    layer: 0 | 1 | 2 | 3,
+    material: MaterialRef | null,
+  ) => void
+  pendingPlantSpecies: string | null
+  pendingPlantScale: number
+  pendingPlantShape: PlantShape
+  setPendingPlant: (
+    species: string | null,
+    scale?: number,
+    shape?: Partial<PlantShape>,
+  ) => void
+  setPendingPlantShape: (patch: Partial<PlantShape>) => void
+  grassDensity: number
+  grassTuftHeight: number
+  grassTuftWidth: number
+  grassColor: string
+  grassSeed: number
+  activeGrassLayerId: string | null
+  setActiveGrassLayer: (id: string) => void
+  addGrassLayer: () => void
+  removeGrassLayer: (id: string) => void
+  renameGrassLayer: (id: string, name: string) => void
+  setGrassParams: (patch: {
+    density?: number
+    height?: number
+    width?: number
+    color?: string
+    seed?: number
+    name?: string
+  }) => void
+  beginLandscapeStroke: () => void
+  stampSculptAt: (x: number, y: number, flattenTarget?: number) => void
+  stampGroundPaintAt: (x: number, y: number, erase: boolean) => void
+  stampGrassAt: (x: number, y: number, erase: boolean) => void
+  ensureLandscapeReady: () => void
 
   transformGizmoMode: TransformGizmoMode
   setTransformGizmoMode: (mode: TransformGizmoMode) => void
@@ -521,6 +604,20 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     transformGizmoMode: 'translate',
     transformDragging: false,
     objectSnapEnabled: true,
+    sculptMode: 'raise',
+    landscapeBrushRadius: 3,
+    landscapeBrushHardness: 0.35,
+    landscapeBrushStrength: 0.35,
+    groundPaintLayer: 1,
+    pendingPlantSpecies: null,
+    pendingPlantScale: 1,
+    pendingPlantShape: defaultPlantShape('ponderosaPine'),
+    grassDensity: SEEDTHREE_GRASS_DEFAULTS.density,
+    grassTuftHeight: SEEDTHREE_GRASS_DEFAULTS.height,
+    grassTuftWidth: SEEDTHREE_GRASS_DEFAULTS.width,
+    grassColor: SEEDTHREE_GRASS_DEFAULTS.color,
+    grassSeed: SEEDTHREE_GRASS_DEFAULTS.seed,
+    activeGrassLayerId: null,
     history: [],
     future: [],
     statusMessage: null,
@@ -577,9 +674,31 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     },
 
     setTool: (tool) => {
-      if (isGroundFloor(get().activeFloor()) && tool !== 'select') return
       const { workbench } = get()
+      const onGround = isGroundFloor(get().activeFloor())
+      if (onGround && workbench !== 'landscape' && tool !== 'select') return
+      if (
+        onGround &&
+        workbench === 'landscape' &&
+        tool !== 'select' &&
+        !isLandscapeTool(tool)
+      ) {
+        return
+      }
       if (tool === 'placeObject') {
+        if (workbench === 'landscape') {
+          set({
+            tool: 'placeObject',
+            wallDraftFrom: null,
+            mepDraftFrom: null,
+            openingDraft: null,
+            slabOpeningDraft: null,
+            floorPlateDraft: null,
+            pendingPlantSpecies: null,
+            statusMessage: 'Выберите объект в коллекции слева',
+          })
+          return
+        }
         set({
           workbench: 'furnish',
           tool: 'select',
@@ -673,6 +792,23 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         })
         return
       }
+      if (workbench === 'landscape') {
+        const g = get().building.floors.find(isGroundFloor)
+        set({
+          workbench,
+          viewMode: '3d',
+          sceneMode: prev === 'visit' ? 'visit' : 'exterior',
+          tool: 'select',
+          activeFloorId: g?.id ?? get().activeFloorId,
+          pendingModel: null,
+          pendingPlantSpecies: null,
+          modelBrowserOpen: false,
+          collectionBrowserOpen: false,
+          ...drafts,
+        })
+        get().ensureLandscapeReady()
+        return
+      }
       // furnish
       set({
         workbench,
@@ -685,7 +821,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     setViewMode: (viewMode) => {
       const { workbench, sceneMode } = get()
       // Paint only makes sense in 3D — leaving 3D exits paint workbench
-      if (viewMode === '2d' && workbench === 'paint') {
+      if (viewMode === '2d' && (workbench === 'paint' || workbench === 'landscape')) {
         set({
           viewMode,
           workbench: 'draft',
@@ -816,7 +952,9 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         slabOpeningDraft: null,
         floorPlateDraft: null,
         conflict: false,
-        ...(floor && isGroundFloor(floor) ? { tool: 'select' as const } : {}),
+        ...(floor && isGroundFloor(floor) && get().workbench !== 'landscape'
+          ? { tool: 'select' as const }
+          : {}),
       })
     },
 
@@ -1660,11 +1798,16 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     setPendingModel: (pendingModel) =>
       set({
         pendingModel,
-        workbench: pendingModel ? 'furnish' : get().workbench,
+        workbench: pendingModel
+          ? get().workbench === 'landscape'
+            ? 'landscape'
+            : 'furnish'
+          : get().workbench,
         tool: pendingModel ? 'placeObject' : 'select',
         viewMode: pendingModel ? '3d' : get().viewMode,
         modelBrowserOpen: false,
         collectionBrowserOpen: false,
+        pendingPlantSpecies: pendingModel ? null : get().pendingPlantSpecies,
         sceneMode:
           pendingModel && get().sceneMode === 'paint'
             ? 'interior'
@@ -1680,10 +1823,6 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         set({
           statusMessage: 'Сначала выберите модель в коллекции слева',
         })
-        return
-      }
-      if (isGroundFloor(get().activeFloor())) {
-        set({ statusMessage: 'Модели ставятся на этаж, не на землю' })
         return
       }
       get().pushHistory()
@@ -1815,11 +1954,415 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         // Stop placement mode so gizmo / LMB work on the object
         pendingModel: null,
         tool: 'select',
-        workbench: 'furnish',
+        workbench: get().workbench === 'landscape' ? 'landscape' : 'furnish',
         viewMode: '3d',
         statusMessage: null,
         // New selection → drag = move; double-click later cycles mode
         ...(same ? {} : { transformGizmoMode: 'translate' as const }),
+      })
+    },
+
+    selectPlant: (id) => {
+      const g = get().building.floors.find(isGroundFloor)
+      if (!g) return
+      set({
+        activeFloorId: g.id,
+        selection: { kind: 'plant', id },
+        pendingModel: null,
+        pendingPlantSpecies: null,
+        tool: 'select',
+        workbench: 'landscape',
+        viewMode: '3d',
+        transformGizmoMode: 'translate',
+      })
+    },
+
+    setSculptMode: (sculptMode) => set({ sculptMode }),
+    setLandscapeBrush: (patch) =>
+      set({
+        landscapeBrushRadius:
+          patch.radius ?? get().landscapeBrushRadius,
+        landscapeBrushHardness:
+          patch.hardness ?? get().landscapeBrushHardness,
+        landscapeBrushStrength:
+          patch.strength ?? get().landscapeBrushStrength,
+      }),
+    setGroundPaintLayer: (groundPaintLayer) => set({ groundPaintLayer }),
+    setPendingPlant: (species, scale, shape) =>
+      set({
+        pendingPlantSpecies: species,
+        pendingPlantScale: scale ?? get().pendingPlantScale,
+        pendingPlantShape: species
+          ? resolvePlantShape(
+              species,
+              shape ??
+                (species === get().pendingPlantSpecies
+                  ? get().pendingPlantShape
+                  : undefined),
+            )
+          : get().pendingPlantShape,
+        pendingModel: species ? null : get().pendingModel,
+        tool: species ? 'plant' : get().tool,
+        statusMessage: species
+          ? 'Кликните по земле, чтобы посадить растение'
+          : null,
+      }),
+    setPendingPlantShape: (patch) => {
+      const species = get().pendingPlantSpecies ?? 'ponderosaPine'
+      set({
+        pendingPlantShape: resolvePlantShape(species, {
+          ...get().pendingPlantShape,
+          ...patch,
+        }),
+      })
+    },
+    setGrassParams: (patch) => {
+      const g = get().building.floors.find(isGroundFloor)
+      if (!g) return
+      const grass = normalizeLandscapeGrass(g.landscapeGrass) ?? emptyGrassDoc()
+      const layer =
+        findGrassLayer(grass, get().activeGrassLayerId) ?? grass.layers[0]
+      if (!layer) return
+      const next = replaceGrassLayer(grass, layer.id, {
+        density: patch.density ?? layer.density,
+        height: patch.height ?? layer.height,
+        width: patch.width ?? layer.width,
+        color: patch.color ?? layer.color,
+        seed: patch.seed ?? layer.seed,
+        name: patch.name ?? layer.name,
+      })
+      const updated = findGrassLayer(next, layer.id)!
+      set({
+        grassDensity: updated.density,
+        grassTuftHeight: updated.height,
+        grassTuftWidth: updated.width,
+        grassColor: updated.color,
+        grassSeed: updated.seed,
+        activeGrassLayerId: updated.id,
+        building: replaceFloor(get().building, {
+          ...g,
+          landscapeGrass: next,
+        }),
+      })
+    },
+    setActiveGrassLayer: (id) => {
+      const g = get().building.floors.find(isGroundFloor)
+      const layer = findGrassLayer(g?.landscapeGrass, id)
+      if (!layer) return
+      set({
+        activeGrassLayerId: layer.id,
+        grassDensity: layer.density,
+        grassTuftHeight: layer.height,
+        grassTuftWidth: layer.width,
+        grassColor: layer.color,
+        grassSeed: layer.seed,
+        tool: 'paintGrass',
+      })
+    },
+    addGrassLayer: () => {
+      const g = get().building.floors.find(isGroundFloor)
+      if (!g) return
+      const grass = normalizeLandscapeGrass(g.landscapeGrass) ?? emptyGrassDoc()
+      if (grass.layers.length >= MAX_GRASS_LAYERS) return
+      get().pushHistory()
+      const layer = createGrassLayer(nextGrassPreset(grass.layers))
+      const next: LandscapeGrass = {
+        ...grass,
+        layers: [...grass.layers, layer],
+      }
+      set({
+        activeGrassLayerId: layer.id,
+        grassDensity: layer.density,
+        grassTuftHeight: layer.height,
+        grassTuftWidth: layer.width,
+        grassColor: layer.color,
+        grassSeed: layer.seed,
+        tool: 'paintGrass',
+        building: replaceFloor(get().building, {
+          ...g,
+          landscapeGrass: next,
+        }),
+        statusMessage: `Новый тип: ${layer.name}. Красьте кистью там, где он нужен.`,
+      })
+    },
+    removeGrassLayer: (id) => {
+      const g = get().building.floors.find(isGroundFloor)
+      if (!g) return
+      const grass = normalizeLandscapeGrass(g.landscapeGrass)
+      if (!grass || grass.layers.length <= 1) return
+      get().pushHistory()
+      const next: LandscapeGrass = {
+        ...grass,
+        layers: grass.layers.filter((l) => l.id !== id),
+      }
+      const layer = findGrassLayer(next, get().activeGrassLayerId === id ? next.layers[0]?.id : get().activeGrassLayerId)
+      set({
+        building: replaceFloor(get().building, {
+          ...g,
+          landscapeGrass: next,
+        }),
+        ...(layer
+          ? {
+              activeGrassLayerId: layer.id,
+              grassDensity: layer.density,
+              grassTuftHeight: layer.height,
+              grassTuftWidth: layer.width,
+              grassColor: layer.color,
+              grassSeed: layer.seed,
+            }
+          : {}),
+      })
+    },
+    renameGrassLayer: (id, name) => {
+      const g = get().building.floors.find(isGroundFloor)
+      if (!g?.landscapeGrass) return
+      set({
+        building: replaceFloor(get().building, {
+          ...g,
+          landscapeGrass: replaceGrassLayer(g.landscapeGrass, id, { name }),
+        }),
+      })
+    },
+
+    ensureLandscapeReady: () => {
+      const { building } = get()
+      const g = building.floors.find(isGroundFloor)
+      if (!g) return
+      const terrain = ensureTerrain(building, g.landscapeTerrain)
+      const grass = normalizeLandscapeGrass(g.landscapeGrass)
+      const layer = findGrassLayer(grass, get().activeGrassLayerId)
+      const patch: {
+        building?: Building
+        grassDensity?: number
+        grassTuftHeight?: number
+        grassTuftWidth?: number
+        grassColor?: string
+        grassSeed?: number
+        activeGrassLayerId?: string
+      } = {}
+      if (grass && !g.landscapeGrass?.layers) {
+        patch.building = replaceFloor(building, { ...g, landscapeGrass: grass })
+      }
+      if (layer) {
+        patch.grassDensity = layer.density
+        patch.grassTuftHeight = layer.height
+        patch.grassTuftWidth = layer.width
+        patch.grassColor = layer.color
+        patch.grassSeed = layer.seed
+        patch.activeGrassLayerId = layer.id
+      }
+      if (g.landscapeTerrain !== terrain) {
+        const base = patch.building ?? building
+        const floor = base.floors.find(isGroundFloor) ?? g
+        patch.building = replaceFloor(base, { ...floor, landscapeTerrain: terrain })
+      }
+      if (Object.keys(patch).length > 0) set(patch)
+    },
+
+    beginLandscapeStroke: () => {
+      get().ensureLandscapeReady()
+      get().pushHistory()
+    },
+
+    stampSculptAt: (x, y, flattenTarget) => {
+      const g = get().building.floors.find(isGroundFloor)
+      if (!g) return
+      const terrain = ensureTerrain(get().building, g.landscapeTerrain)
+      const res = terrain.resolution
+      const heights = decodeHeights(terrain.heightPng, res * res)
+      const frame = terrainFrame(terrain)
+      const lock = buildLockMask(
+        res,
+        frame,
+        footprintHolesForLock(get().building),
+      )
+      sculptStamp(
+        heights,
+        res,
+        frame,
+        x,
+        y,
+        get().landscapeBrushRadius,
+        get().landscapeBrushHardness,
+        get().landscapeBrushStrength,
+        get().sculptMode,
+        lock,
+        flattenTarget ?? 0,
+      )
+      set({
+        building: replaceFloor(get().building, {
+          ...g,
+          landscapeTerrain: persistHeights(terrain, heights),
+        }),
+      })
+    },
+
+    setGroundPaintLayerMaterial: (layer, material) => {
+      const g = get().building.floors.find(isGroundFloor)
+      if (!g) return
+      get().pushHistory()
+      const layers: [
+        MaterialRef | null,
+        MaterialRef | null,
+        MaterialRef | null,
+        MaterialRef | null,
+      ] = [
+        g.landscapePaint?.layers[0] ?? null,
+        g.landscapePaint?.layers[1] ?? null,
+        g.landscapePaint?.layers[2] ?? null,
+        g.landscapePaint?.layers[3] ?? null,
+      ]
+      layers[layer] = material
+      set({
+        building: replaceFloor(get().building, {
+          ...g,
+          landscapePaint: {
+            layers,
+            splatPng: g.landscapePaint?.splatPng,
+            resolution: g.landscapePaint?.resolution ?? 256,
+          },
+        }),
+        paintBrush: material,
+        groundPaintLayer: layer,
+      })
+    },
+
+    stampGroundPaintAt: (x, y, erase) => {
+      const g = get().building.floors.find(isGroundFloor)
+      if (!g) return
+      const res = g.landscapePaint?.resolution ?? 256
+      const data = decodeBytes(g.landscapePaint?.splatPng, res * res * 4)
+      const terrain = ensureTerrain(get().building, g.landscapeTerrain)
+      const lock = buildLockMask(
+        res,
+        terrainFrame(terrain),
+        footprintHolesForLock(get().building),
+      )
+      stampSplat(
+        data,
+        res,
+        terrainFrame(terrain),
+        x,
+        y,
+        get().landscapeBrushRadius,
+        get().landscapeBrushHardness,
+        get().landscapeBrushStrength,
+        get().groundPaintLayer,
+        erase,
+        lock,
+      )
+      set({
+        building: replaceFloor(get().building, {
+          ...g,
+          landscapePaint: {
+            layers: g.landscapePaint?.layers ?? [null, null, null, null],
+            splatPng: encodeBytes(data),
+            resolution: res,
+          },
+        }),
+      })
+    },
+
+    stampGrassAt: (x, y, erase) => {
+      const g = get().building.floors.find(isGroundFloor)
+      if (!g) return
+      const grass = normalizeLandscapeGrass(g.landscapeGrass) ?? emptyGrassDoc()
+      const layer =
+        findGrassLayer(grass, get().activeGrassLayerId) ??
+        grass.layers[0] ??
+        createGrassLayer()
+      const layers = grass.layers.some((l) => l.id === layer.id)
+        ? grass.layers
+        : [...grass.layers, layer]
+      const res = grass.resolution
+      const data = decodeBytes(layer.coveragePng, res * res)
+      const terrain = ensureTerrain(get().building, g.landscapeTerrain)
+      const lock = buildLockMask(
+        res,
+        terrainFrame(terrain),
+        footprintHolesForLock(get().building),
+      )
+      stampCoverage(
+        data,
+        res,
+        terrainFrame(terrain),
+        x,
+        y,
+        get().landscapeBrushRadius,
+        get().landscapeBrushHardness,
+        get().landscapeBrushStrength,
+        erase,
+        lock,
+      )
+      set({
+        activeGrassLayerId: layer.id,
+        building: replaceFloor(get().building, {
+          ...g,
+          landscapeGrass: {
+            resolution: res,
+            layers: layers.map((l) =>
+              l.id === layer.id
+                ? { ...l, coveragePng: encodeBytes(data) }
+                : l,
+            ),
+          },
+        }),
+      })
+    },
+
+    placePlantAt: (x, y) => {
+      const species = get().pendingPlantSpecies
+      if (!species) {
+        set({ statusMessage: 'Сначала выберите вид слева' })
+        return
+      }
+      const g = get().building.floors.find(isGroundFloor)
+      if (!g) return
+      if (pointInFootprint(get().building, x, y)) {
+        set({ statusMessage: 'Нельзя сажать на пятне здания' })
+        return
+      }
+      get().pushHistory()
+      const plant: LandscapePlant = {
+        id: createId('plt'),
+        species,
+        seed: 1 + Math.floor(Math.random() * 9998),
+        x,
+        y,
+        rotationY: Math.random() * Math.PI * 2,
+        scale: get().pendingPlantScale,
+        shape: { ...get().pendingPlantShape },
+      }
+      set({
+        building: replaceFloor(get().building, {
+          ...g,
+          plants: [...(g.plants ?? []), plant],
+        }),
+        selection: { kind: 'plant', id: plant.id },
+        statusMessage: 'Растение посажено',
+      })
+    },
+
+    updatePlant: (id, patch) => {
+      const g = get().building.floors.find(isGroundFloor)
+      if (!g) return
+      get().pushHistory()
+      set({
+        building: replaceFloor(get().building, {
+          ...g,
+          plants: (g.plants ?? []).map((p) => {
+            if (p.id !== id) return p
+            const { shape, ...rest } = patch
+            const species = rest.species ?? p.species
+            return {
+              ...p,
+              ...rest,
+              shape: shape
+                ? resolvePlantShape(species, { ...p.shape, ...shape })
+                : p.shape,
+            }
+          }),
+        }),
       })
     },
 
@@ -2654,6 +3197,12 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         floor = {
           ...floor,
           objects: (floor.objects ?? []).filter((o) => o.id !== selection.id),
+        }
+      } else if (selection.kind === 'plant') {
+        const g = get().building.floors.find(isGroundFloor) ?? floor
+        floor = {
+          ...g,
+          plants: (g.plants ?? []).filter((p) => p.id !== selection.id),
         }
       } else if (selection.kind === 'pipeSegment') {
         const net = ensurePipeNetwork(floor.pipes)

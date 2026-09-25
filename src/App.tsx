@@ -233,6 +233,34 @@ export default function App() {
         }
         return
       }
+      if (!mod && workbench === 'landscape') {
+        const landscapeKeys: Record<string, Tool> = {
+          v: 'select',
+          e: 'sculptGround',
+          f: 'placeObject',
+          t: 'paintGround',
+          p: 'plant',
+          r: 'paintGrass',
+        }
+        if (
+          selection &&
+          (selection.kind === 'object' || selection.kind === 'plant') &&
+          (key === 'g' || key === 'k' || key === 'y')
+        ) {
+          e.preventDefault()
+          setTool('select')
+          setTransformGizmoMode(
+            key === 'g' ? 'translate' : key === 'k' ? 'rotate' : 'scale',
+          )
+          return
+        }
+        const t = landscapeKeys[key]
+        if (t) {
+          e.preventDefault()
+          setTool(t)
+        }
+        return
+      }
       if (!mod && workbench === 'electrical') {
         const electricalKeys: Record<string, Tool> = {
           v: 'select',

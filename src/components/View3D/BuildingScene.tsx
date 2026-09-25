@@ -16,7 +16,7 @@ import {
 import { ToneMappingMode } from 'postprocessing'
 import { useEffect, useMemo, useRef, useState, Suspense } from 'react'
 import type { ThreeEvent } from '@react-three/fiber'
-import { buildingBounds, buildingFootprintHoles, extrudeBuilding } from '../../engine/extrude'
+import { buildingBounds, extrudeBuilding } from '../../engine/extrude'
 import { floorPaintRegions } from '../../engine/geometry/floorPaint'
 import { resolveFloorRegionMaterial } from '../../engine/geometry/floorPlates'
 import { floorSlabOpeningHoles } from '../../engine/geometry/slabOpenings'
@@ -52,6 +52,10 @@ import { VisitControls, type VisitActiveState } from './VisitControls'
 import { WallPickables } from './WallPickables'
 import { PlaceObjectFloorHit, PlacedObjects } from './PlacedObjects'
 import { MepNetworks } from './MepNetworks'
+import { TerrainGround } from './TerrainGround'
+import { LandscapePlants } from './LandscapePlants'
+import { LandscapeGrass } from './LandscapeGrass'
+import { heightAt, shouldShowOutdoorLandscape } from '../../landscape/terrain'
 
 /**
  * Procedural IBL via Lightformers (no CDN HDR).
@@ -286,7 +290,8 @@ function WallFaceMesh({
   const routing = useBuildingStore(
     (s) => isMepDrawTool(s.tool) || isMepFixtureTool(s.tool),
   )
-  const blockHits = painting || placing || routing
+  const landscaping = useBuildingStore((s) => s.workbench === 'landscape')
+  const blockHits = painting || placing || routing || landscaping
 
   const onClick = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation()
@@ -358,7 +363,8 @@ function WallCutMesh({
   const routing = useBuildingStore(
     (s) => isMepDrawTool(s.tool) || isMepFixtureTool(s.tool),
   )
-  const blockHits = painting || placing || routing
+  const landscaping = useBuildingStore((s) => s.workbench === 'landscape')
+  const blockHits = painting || placing || routing || landscaping
 
   const onClick = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation()
@@ -427,7 +433,8 @@ function FloorFinishes({
   const routing = useBuildingStore(
     (s) => isMepDrawTool(s.tool) || isMepFixtureTool(s.tool),
   )
-  const blockHits = painting || placing || routing
+  const landscaping = useBuildingStore((s) => s.workbench === 'landscape')
+  const blockHits = painting || placing || routing || landscaping
 
   const wallFaces = useMemo(() => {
     if (!floor || !isStoryFloor(floor)) return []
@@ -787,77 +794,6 @@ function FloorSlabRegionMesh({
   )
 }
 
-function GroundPlane({
-  size,
-  y,
-  centerX,
-  centerZ,
-  holes,
-  shadowsEnabled,
-  pickable = true,
-}: {
-  size: number
-  y: number
-  centerX: number
-  centerZ: number
-  holes: Array<Array<{ x: number; z: number }>>
-  shadowsEnabled: boolean
-  pickable?: boolean
-}) {
-  const geometry = useMemo(() => {
-    const half = size / 2
-    const shape = new THREE.Shape()
-    // Outer rectangle in plan (X / Z → Shape X / Y)
-    shape.moveTo(centerX - half, centerZ - half)
-    shape.lineTo(centerX + half, centerZ - half)
-    shape.lineTo(centerX + half, centerZ + half)
-    shape.lineTo(centerX - half, centerZ + half)
-    shape.closePath()
-
-    for (const hole of holes) {
-      if (hole.length < 3) continue
-      const path = new THREE.Path()
-      path.moveTo(hole[0].x, hole[0].z)
-      for (let i = 1; i < hole.length; i++) {
-        path.lineTo(hole[i].x, hole[i].z)
-      }
-      path.closePath()
-      shape.holes.push(path)
-    }
-
-    const geo = new THREE.ShapeGeometry(shape)
-    geo.rotateX(-Math.PI / 2)
-    geo.translate(0, y, 0)
-    return geo
-  }, [size, y, centerX, centerZ, holes])
-
-  useEffect(() => {
-    return () => {
-      geometry.dispose()
-    }
-  }, [geometry])
-
-  return (
-    <mesh
-      geometry={geometry}
-      receiveShadow={shadowsEnabled}
-      renderOrder={-1}
-      raycast={pickable ? undefined : disableRaycast}
-    >
-      <meshStandardMaterial
-        color="#9aab9c"
-        roughness={0.95}
-        metalness={0}
-        side={THREE.DoubleSide}
-        depthWrite
-        polygonOffset
-        polygonOffsetFactor={1}
-        polygonOffsetUnits={1}
-      />
-    </mesh>
-  )
-}
-
 function SunLight({
   position,
   intensity,
@@ -943,18 +879,20 @@ function SceneContent({
   const painting = sceneMode === 'paint'
   const placing =
     !visit && !painting && tool === 'placeObject' && pendingModel != null
+  const landscaping =
+    !visit && !painting && workbench === 'landscape'
   const routing =
-    !visit && !painting && !placing && (isMepDrawTool(tool) || isMepFixtureTool(tool))
+    !visit &&
+    !painting &&
+    !placing &&
+    !landscaping &&
+    (isMepDrawTool(tool) || isMepFixtureTool(tool))
   const mepGhost = isMepWorkbench(workbench) && !visit && !painting
   /** Paint uses interior-style opacity (only active floor solid). */
   const finishExterior = exterior
 
   const { floors, slabs } = useMemo(() => extrudeBuilding(building), [building])
   const bounds = useMemo(() => buildingBounds(building), [building])
-  const groundHoles = useMemo(
-    () => buildingFootprintHoles(building),
-    [building],
-  )
   const visibilityByFloor = useMemo(() => {
     const map = new Map<string, FloorVisibility>()
     for (const f of building.floors) {
@@ -990,6 +928,12 @@ function SceneContent({
   const groundVisible = isFloorRendered(
     normalizeFloorVisibility(groundFloor?.visible),
   )
+  const showOutdoorLandscape = shouldShowOutdoorLandscape({
+    groundVisible,
+    sceneMode,
+    workbench,
+    activeFloorKind: activeFloor?.kind,
+  })
   const floorY = activeFloor?.kind === 'ground'
     ? groundY
     : (activeFloor?.elevation ?? groundY)
@@ -1057,19 +1001,24 @@ function SceneContent({
         color="#a8c4e0"
       />
 
-      {!visit && groundVisible && (
-        <GroundPlane
-          size={groundSize}
-          y={groundY - 0.01}
-          centerX={planCenterX}
-          centerZ={planCenterZ}
-          holes={groundHoles}
+      {!visit && showOutdoorLandscape && (
+        <TerrainGround
           shadowsEnabled={lighting.shadowsEnabled}
-          pickable={!painting && !placing && !routing}
+          pickable={!painting && !routing}
+        />
+      )}
+      {showOutdoorLandscape && <LandscapeGrass visit={visit} />}
+      {showOutdoorLandscape && (
+        <LandscapePlants shadowsEnabled={lighting.shadowsEnabled} />
+      )}
+      {showOutdoorLandscape && groundFloor && (
+        <PlacedObjects
+          floor={groundFloor}
+          shadowsEnabled={lighting.shadowsEnabled}
         />
       )}
 
-      {lighting.contactShadows && groundVisible && (
+      {lighting.contactShadows && showOutdoorLandscape && (
         <ContactShadows
           position={[planCenterX, groundY - 0.008, -planCenterZ]}
           opacity={0.4}
@@ -1095,7 +1044,7 @@ function SceneContent({
               exterior={finishExterior}
               shadowsEnabled={lighting.shadowsEnabled}
               ghost={ghost}
-              pickable={!painting && !placing && !routing}
+              pickable={!painting && !placing && !routing && !landscaping}
             />
             <FloorFinishes
               floorId={f.floorId}
@@ -1105,7 +1054,7 @@ function SceneContent({
             {painting && f.floorId === activeFloorId && (
               <PaintPickables floorId={f.floorId} />
             )}
-            {floorData && floorData.kind !== 'ground' && (
+            {floorData && (
               <PlacedObjects
                 floor={floorData}
                 shadowsEnabled={lighting.shadowsEnabled}
@@ -1119,10 +1068,12 @@ function SceneContent({
           activeFloorId={activeFloorId}
           shadowsEnabled={lighting.shadowsEnabled}
           visibilityByFloor={visibilityByFloor}
-          pickable={!painting && !placing && !routing}
+          pickable={!painting && !placing && !routing && !landscaping}
         />
-        {!visit && !painting && !placing && !routing && <WallPickables />}
-        {!visit && !painting && !placing && !routing && (
+        {!visit && !painting && !placing && !routing && workbench !== 'landscape' && (
+          <WallPickables />
+        )}
+        {!visit && !painting && !placing && !routing && workbench !== 'landscape' && (
           <OpeningPickables showSlabs />
         )}
         {!visit &&
@@ -1148,6 +1099,9 @@ function SceneContent({
         <VisitControls
           spawn={spawn}
           floorY={floorY}
+          heightAtWorld={(x, z) =>
+            groundY + heightAt(groundFloor?.landscapeTerrain, x, -z)
+          }
           onActiveChange={onVisitActiveChange}
         />
       ) : (

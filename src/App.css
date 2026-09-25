@@ -544,6 +544,174 @@ body.panel-resizing * {
   margin: 0;
 }
 
+.landscape-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  min-height: 0;
+  overflow: auto;
+}
+
+.landscape-brush label {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.2rem 0.5rem;
+  font-size: 0.78rem;
+  margin-bottom: 0.35rem;
+}
+
+.landscape-brush input[type='range'] {
+  grid-column: 1 / -1;
+}
+
+.landscape-layers {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem;
+}
+
+.landscape-layer {
+  min-height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  padding: 0;
+  overflow: hidden;
+}
+
+.landscape-layer.active {
+  outline: 2px solid var(--accent);
+}
+
+.landscape-layer img {
+  width: 100%;
+  height: 48px;
+  object-fit: cover;
+  display: block;
+}
+
+.landscape-layer-fallback {
+  display: flex;
+  align-items: flex-end;
+  height: 48px;
+  padding: 0.2rem 0.35rem;
+  color: #f4efe4;
+  font-size: 0.72rem;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  background: var(--swatch, #6f8a3d);
+}
+
+.landscape-species-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+}
+
+.landscape-species-label {
+  margin: 0.35rem 0 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted, #8a8a82);
+}
+
+.landscape-species {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.3rem;
+}
+
+.landscape-species-swatch {
+  display: block;
+  height: 28px;
+  border-radius: 3px;
+}
+
+.landscape-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.landscape-fields label {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.15rem 0.45rem;
+  font-size: 0.76rem;
+}
+
+.landscape-fields input[type='range'],
+.landscape-fields input[type='color'],
+.landscape-fields input[type='text'],
+.landscape-fields select {
+  grid-column: 1 / -1;
+}
+
+.grass-types {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  margin-bottom: 0.45rem;
+}
+
+.grass-type {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: stretch;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.grass-type.active {
+  outline: 2px solid var(--accent);
+}
+
+.grass-type-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.3rem 0.4rem;
+  border: 0;
+  background: var(--panel);
+  text-align: left;
+  cursor: pointer;
+}
+
+.grass-type-del,
+.grass-type-add {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  cursor: pointer;
+}
+
+.grass-type-del {
+  border: 0;
+  border-left: 1px solid var(--line);
+  padding: 0 0.45rem;
+}
+
+.grass-type-add {
+  border-radius: 4px;
+  padding: 0.35rem 0.45rem;
+  font-size: 0.78rem;
+}
+
+.landscape-fields input[type='color'] {
+  width: 100%;
+  height: 1.6rem;
+  padding: 0;
+  border: 1px solid var(--line);
+  background: transparent;
+}
+
+.landscape-fields label.check {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  grid-template-columns: none;
+}
+
 .paint-workbench-header {
   display: flex;
   align-items: center;
@@ -2270,7 +2438,8 @@ button.ghost.small {
   .workspace-paint,
   .workspace-furnish,
   .workspace-plumbing,
-  .workspace-electrical {
+  .workspace-electrical,
+  .workspace-landscape {
     grid-template-columns: 1fr;
     grid-template-rows: auto 1fr auto;
   }

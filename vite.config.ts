@@ -12,6 +12,7 @@ export default defineConfig({
   base: process.env.BASE_PATH || '/',
   plugins: [react(), assetProxyPlugin()],
   resolve: {
+    dedupe: ['three'],
     alias: {
       math: path.resolve(root, 'vendor/jsketcher/math'),
       gems: path.resolve(root, 'vendor/jsketcher/gems'),
@@ -19,7 +20,7 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    include: ['numeric'],
+    include: ['numeric', '@dgreenheck/ez-tree'],
   },
   server: {
     proxy: apiProxies,

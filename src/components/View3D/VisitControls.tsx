@@ -20,10 +20,12 @@ export type VisitActiveState = {
 export function VisitControls({
   spawn,
   floorY,
+  heightAtWorld,
   onActiveChange,
 }: {
   spawn: [number, number, number]
   floorY: number
+  heightAtWorld?: (x: number, z: number) => number
   onActiveChange?: (state: VisitActiveState) => void
 }) {
   const { camera, gl } = useThree()
@@ -56,7 +58,11 @@ export function VisitControls({
 
   useEffect(() => {
     camera.rotation.order = 'YXZ'
-    camera.position.set(spawnX, floorY + EYE_HEIGHT, spawnZ)
+    camera.position.set(
+      spawnX,
+      (heightAtWorld?.(spawnX, spawnZ) ?? floorY) + EYE_HEIGHT,
+      spawnZ,
+    )
     camera.rotation.set(0, 0, 0)
     euler.current.set(0, 0, 0, 'YXZ')
     camera.quaternion.setFromEuler(euler.current)
@@ -64,7 +70,7 @@ export function VisitControls({
       ;(camera as THREE.PerspectiveCamera).fov = FOV
       ;(camera as THREE.PerspectiveCamera).updateProjectionMatrix()
     }
-  }, [camera, spawnX, spawnZ, floorY])
+  }, [camera, spawnX, spawnZ, floorY, heightAtWorld])
 
   useEffect(() => {
     const el = gl.domElement
@@ -218,8 +224,11 @@ export function VisitControls({
       }
     }
 
+    const surfaceY =
+      heightAtWorld?.(camera.position.x, camera.position.z) ?? floorY
+
     if (!pointerLocked.current) {
-      camera.position.y = floorY + EYE_HEIGHT
+      camera.position.y = surfaceY + EYE_HEIGHT
       return
     }
 
@@ -239,7 +248,7 @@ export function VisitControls({
       }
     }
 
-    camera.position.y = floorY + EYE_HEIGHT
+    camera.position.y = surfaceY + EYE_HEIGHT
   })
 
   return null

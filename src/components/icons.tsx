@@ -19,6 +19,10 @@ export const TOOL_ICONS: Partial<Record<Tool, string>> = {
   outlet: publicUrl('icons/tools/outlet.svg'),
   switch: publicUrl('icons/tools/switch.svg'),
   panel: publicUrl('icons/tools/panel.svg'),
+  sculptGround: publicUrl('icons/tools/sculpt.svg'),
+  paintGround: publicUrl('icons/tools/paint-ground.svg'),
+  plant: publicUrl('icons/tools/plant.svg'),
+  paintGrass: publicUrl('icons/tools/grass.svg'),
   lockLength: CONSTRAINT_ICONS.fixedLength,
   lockPoint: CONSTRAINT_ICONS.fixedPosition,
   horizontal: CONSTRAINT_ICONS.horizontal,
@@ -42,6 +46,7 @@ export const UI_ICONS = {
     furnish: publicUrl('icons/ui/workbench-furnish.svg'),
     plumbing: publicUrl('icons/ui/workbench-plumbing.svg'),
     electrical: publicUrl('icons/ui/workbench-electrical.svg'),
+    landscape: publicUrl('icons/ui/workbench-landscape.svg'),
   } satisfies Record<Workbench, string>,
 } as const
 

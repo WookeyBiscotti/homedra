@@ -28,6 +28,11 @@ const WORKBENCHES: { id: Workbench; label: string; hint: string }[] = [
     label: 'Электрика',
     hint: 'Кабели, розетки, выключатели, щитки',
   },
+  {
+    id: 'landscape',
+    label: 'Ландшафт',
+    hint: 'Рельеф, грунт, растения и трава',
+  },
 ]
 
 export function WorkbenchSwitcher() {
