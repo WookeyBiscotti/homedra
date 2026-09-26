@@ -396,10 +396,22 @@ function GlbInstance({
     })
   }
 
+  const cancelXyDrag = () => {
+    xyDragCleanup.current?.()
+    xyDragCleanup.current = null
+    xyDragging.current = false
+    const g = groupRef.current
+    if (g) applyPlacedTransform(g, obj, floorElevation, terrainLift)
+    invalidate()
+  }
+
   const startXyDrag = (e: ThreeEvent<PointerEvent>) => {
     if (e.button !== 0) return
     if (pendingModel) return
     if (sceneMode === 'visit' || sceneMode === 'paint') return
+    // Scale / rotate gizmos sit over the mesh. A body drag on the same
+    // pointer would slide the object while the handle changes size.
+    if (selected && gizmoMode !== 'translate') return
     e.stopPropagation()
     onSelect()
 
@@ -432,6 +444,13 @@ function GlbInstance({
     xyDragging.current = true
     setTransformDragging(true)
 
+    const detach = () => {
+      gl.domElement.removeEventListener('pointermove', onMove)
+      gl.domElement.removeEventListener('pointerup', onUp)
+      gl.domElement.removeEventListener('pointercancel', onUp)
+      xyDragCleanup.current = null
+    }
+
     const onMove = (ev: PointerEvent) => {
       const g = groupRef.current
       if (!g) return
@@ -445,10 +464,7 @@ function GlbInstance({
     }
 
     const onUp = () => {
-      gl.domElement.removeEventListener('pointermove', onMove)
-      gl.domElement.removeEventListener('pointerup', onUp)
-      gl.domElement.removeEventListener('pointercancel', onUp)
-      xyDragCleanup.current = null
+      detach()
       if (moved) commitTransform()
       else invalidate()
       // Clear flags after persist so layout effects cannot write the
@@ -461,7 +477,10 @@ function GlbInstance({
     gl.domElement.addEventListener('pointermove', onMove)
     gl.domElement.addEventListener('pointerup', onUp)
     gl.domElement.addEventListener('pointercancel', onUp)
-    xyDragCleanup.current = onUp
+    xyDragCleanup.current = () => {
+      detach()
+      xyDragging.current = false
+    }
   }
 
   return (
@@ -478,7 +497,9 @@ function GlbInstance({
           onSelect()
           cycleTransformGizmoMode()
         }}
-        onPointerDown={startXyDrag}
+        onPointerDown={
+          !selected || gizmoMode === 'translate' ? startXyDrag : undefined
+        }
       >
         <primitive object={scene} />
         <mesh
@@ -501,8 +522,11 @@ function GlbInstance({
           object={groupRef as RefObject<THREE.Object3D>}
           mode={gizmoMode}
           size={1}
-          space="world"
-          onMouseDown={() => setTransformDragging(true)}
+          space={gizmoMode === 'translate' ? 'world' : 'local'}
+          onMouseDown={() => {
+            cancelXyDrag()
+            setTransformDragging(true)
+          }}
           onMouseUp={() => {
             commitTransform()
             setTransformDragging(false)

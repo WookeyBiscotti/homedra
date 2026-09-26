@@ -772,17 +772,16 @@ export function PropertiesPanel() {
         </section>
       )}
 
-      {isFurnish && !placedObject && !opening && !slabOpening && (
+      {isFurnish && !placedObject && (
         <p className="muted">
-          Выберите объект, окно или проём на плане или в 3D, либо поставьте
-          новый из каталога.
+          Выберите объект на плане или в 3D, либо поставьте новый из каталога.
         </p>
       )}
 
       {((!isGround && (isDraft || isPaint || isFurnish)) ||
         (isLandscape && placedObject)) && (
         <>
-      {(isDraft || isFurnish) && slabOpening && (
+      {isDraft && slabOpening && (
         <section className="prop-section">
           <h3>{slabOpeningKindLabel(slabOpening.kind)}</h3>
           <p className="muted">Прямоугольный вырез в плите пола</p>
@@ -1098,7 +1097,7 @@ export function PropertiesPanel() {
         </section>
       )}
 
-      {(isDraft || isFurnish) && opening && (
+      {isDraft && opening && (
         <section className="prop-section">
           <h3>{openingKindLabel(opening.kind)}</h3>
           <label>

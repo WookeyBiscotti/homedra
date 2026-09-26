@@ -809,12 +809,14 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         get().ensureLandscapeReady()
         return
       }
-      // furnish
+      // furnish — only objects are in play; drop wall/opening highlights
+      const sel = get().selection
       set({
         workbench,
         viewMode: '3d',
         sceneMode: prev === 'paint' ? 'interior' : prev,
         tool: 'select',
+        selection: sel?.kind === 'object' ? sel : null,
         ...drafts,
       })
     },

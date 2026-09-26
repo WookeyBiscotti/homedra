@@ -1113,7 +1113,12 @@ function SceneContent({
         {!visit && !painting && !placing && !routing && workbench !== 'landscape' && (
           <WallPickables />
         )}
-        {!visit && !painting && !placing && !routing && workbench !== 'landscape' && (
+        {!visit &&
+          !painting &&
+          !placing &&
+          !routing &&
+          workbench !== 'landscape' &&
+          workbench !== 'furnish' && (
           <OpeningPickables showSlabs />
         )}
         {!visit &&
