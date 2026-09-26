@@ -1,6 +1,7 @@
 import { Edges } from '@react-three/drei'
 import type { ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
+import { sameBuildingPicks } from '../../engine/extrude'
 import { wallEndpoints } from '../../engine/geometry/openings'
 import {
   isFloorRendered,
@@ -8,7 +9,7 @@ import {
   isSlabOpeningSelected,
   normalizeFloorVisibility,
 } from '../../engine/types'
-import { useBuildingStore } from '../../store/buildingStore'
+import { useBuildingEqual, useBuildingStore } from '../../store/buildingStore'
 
 const SELECTED = '#c45c26'
 const IDLE = '#2a6f6a'
@@ -153,7 +154,7 @@ function SlabOpeningMesh({
 
 /** Translucent hit targets for wall & slab openings in 3D. */
 export function OpeningPickables({ showSlabs }: { showSlabs: boolean }) {
-  const building = useBuildingStore((s) => s.building)
+  const building = useBuildingEqual((s) => s.building, sameBuildingPicks)
   const activeFloorId = useBuildingStore((s) => s.activeFloorId)
   const selection = useBuildingStore((s) => s.selection)
 

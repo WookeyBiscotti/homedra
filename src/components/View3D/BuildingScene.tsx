@@ -16,7 +16,12 @@ import {
 import { ToneMappingMode } from 'postprocessing'
 import { useEffect, useMemo, useRef, useState, Suspense } from 'react'
 import type { ThreeEvent } from '@react-three/fiber'
-import { buildingBounds, extrudeBuilding } from '../../engine/extrude'
+import {
+  buildingBounds,
+  buildingMeshDeps,
+  extrudeBuilding,
+} from '../../engine/extrude'
+import { useRefMemo } from '../../hooks/useRefMemo'
 import { floorPaintRegions } from '../../engine/geometry/floorPaint'
 import { resolveFloorRegionMaterial } from '../../engine/geometry/floorPlates'
 import { floorSlabOpeningHoles } from '../../engine/geometry/slabOpenings'
@@ -41,7 +46,7 @@ import {
   type MaterialRef,
   type WallSide,
 } from '../../engine/types'
-import { useBuildingStore } from '../../store/buildingStore'
+import { useBuildingEqual, useBuildingStore } from '../../store/buildingStore'
 import * as THREE from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { LightingPanel } from './LightingPanel'
@@ -459,8 +464,23 @@ function FloorFinishes({
   shadowsEnabled: boolean
   ghost?: boolean
 }) {
-  const floor = useBuildingStore((s) =>
-    s.building.floors.find((f) => f.id === floorId),
+  const floor = useBuildingEqual(
+    (s) => s.building.floors.find((f) => f.id === floorId),
+    (a, b) => {
+      if (a === b) return true
+      if (!a || !b) return a === b
+      return (
+        a.kind === b.kind &&
+        a.elevation === b.elevation &&
+        a.height === b.height &&
+        a.vertices === b.vertices &&
+        a.walls === b.walls &&
+        a.openings === b.openings &&
+        a.slabOpenings === b.slabOpenings &&
+        a.plates === b.plates &&
+        a.roomFloorMaterials === b.roomFloorMaterials
+      )
+    },
   )
   const selection = useBuildingStore((s) => s.selection)
   const setSelection = useBuildingStore((s) => s.setSelection)
@@ -503,7 +523,16 @@ function FloorFinishes({
       }
     }
     return items
-  }, [floor])
+    // Object / plant edits replace `floor` but keep wall topology.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- structural fields only
+  }, [
+    floor?.kind,
+    floor?.elevation,
+    floor?.height,
+    floor?.vertices,
+    floor?.walls,
+    floor?.openings,
+  ])
 
   const wallCuts = useMemo(() => {
     if (!floor || !isStoryFloor(floor)) return []
@@ -528,7 +557,8 @@ function FloorFinishes({
       })
     }
     return items
-  }, [floor])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- structural fields only
+  }, [floor?.kind, floor?.elevation, floor?.height, floor?.vertices, floor?.walls, floor?.openings])
 
   const slabCuts = useMemo(() => {
     if (!floor || !isStoryFloor(floor)) return []
@@ -551,7 +581,15 @@ function FloorFinishes({
       })
     }
     return items
-  }, [floor])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- structural fields only
+  }, [
+    floor?.kind,
+    floor?.elevation,
+    floor?.vertices,
+    floor?.walls,
+    floor?.slabOpenings,
+    floor?.plates,
+  ])
 
   const roomFloors = useMemo(() => {
     if (!floor || !isStoryFloor(floor)) return []
@@ -573,7 +611,16 @@ function FloorFinishes({
       out.push({ key: region.key, geo, mat })
     }
     return out
-  }, [floor])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- structural fields only
+  }, [
+    floor?.kind,
+    floor?.elevation,
+    floor?.vertices,
+    floor?.walls,
+    floor?.slabOpenings,
+    floor?.plates,
+    floor?.roomFloorMaterials,
+  ])
 
   useEffect(() => {
     return () => {
@@ -931,8 +978,15 @@ function SceneContent({
   /** Paint uses interior-style opacity (only active floor solid). */
   const finishExterior = exterior
 
-  const { floors, slabs } = useMemo(() => extrudeBuilding(building), [building])
-  const bounds = useMemo(() => buildingBounds(building), [building])
+  const meshDeps = buildingMeshDeps(building)
+  const { floors, slabs } = useRefMemo(
+    () => extrudeBuilding(building),
+    meshDeps,
+  )
+  const bounds = useRefMemo(() => buildingBounds(building), meshDeps)
+  const visibilitySig = building.floors
+    .map((f) => `${f.id}:${normalizeFloorVisibility(f.visible)}`)
+    .join('|')
   const visibilityByFloor = useMemo(() => {
     const map = new Map<string, FloorVisibility>()
     for (const f of building.floors) {
@@ -943,7 +997,9 @@ function SceneContent({
       if (cur === 'solid') map.set(activeFloorId, 'ghost')
     }
     return map
-  }, [building.floors, mepGhost, activeFloorId])
+    // visibilitySig covers floor identity + visible flag
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibilitySig, mepGhost, activeFloorId])
 
   const visibleFloorIds = useMemo(() => {
     const ids = new Set<string>()

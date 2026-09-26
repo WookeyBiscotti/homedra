@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { useStoreWithEqualityFn } from 'zustand/traditional'
 import {
   applyDragWithConstraints,
   applyMultiDrag,
@@ -74,6 +75,7 @@ import {
   type PipeSegment,
   PIPE_MEDIUM_META,
   type PlacedObject,
+  clonePlacedObject,
   normalizeFloorVisibility,
   recalcFloorElevations,
   type SceneMode,
@@ -400,9 +402,12 @@ interface BuildingState {
         | 'animationDuration'
       >
     >,
+    opts?: { history?: boolean },
   ) => void
   /** Drag placed object in plan (no history). */
   dragPlacedObject: (id: string, x: number, y: number) => void
+  /** Duplicate the selected placed object on the active floor. */
+  copySelectedObject: () => void
   selectObject: (floorId: string, id: string) => void
   selectPlant: (id: string) => void
   placePlantAt: (x: number, y: number) => void
@@ -1887,8 +1892,8 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       })
     },
 
-    updatePlacedObject: (id, patch) => {
-      get().pushHistory()
+    updatePlacedObject: (id, patch, opts) => {
+      if (opts?.history !== false) get().pushHistory()
       const floor = get().activeFloor()
       const next: Floor = {
         ...floor,
@@ -1940,6 +1945,32 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       set({
         building: replaceFloor(get().building, next),
         selection: { kind: 'object', id },
+      })
+    },
+
+    copySelectedObject: () => {
+      const { selection } = get()
+      if (selection?.kind !== 'object') {
+        set({ statusMessage: 'Сначала выберите объект' })
+        return
+      }
+      const floor = get().activeFloor()
+      const src = (floor.objects ?? []).find((o) => o.id === selection.id)
+      if (!src) {
+        set({ statusMessage: 'Объект не найден' })
+        return
+      }
+      get().pushHistory()
+      const copy = clonePlacedObject(src)
+      const next: Floor = {
+        ...floor,
+        objects: [...(floor.objects ?? []), copy],
+      }
+      set({
+        building: replaceFloor(get().building, next),
+        selection: { kind: 'object', id: copy.id },
+        transformGizmoMode: 'translate',
+        statusMessage: 'Объект скопирован',
       })
     },
 
@@ -3358,6 +3389,14 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     },
   }
 })
+
+/** Zustand v5: custom equality (furniture edits must not remesh walls/grass). */
+export function useBuildingEqual<T>(
+  selector: (s: BuildingState) => T,
+  isEqual: (a: T, b: T) => boolean,
+): T {
+  return useStoreWithEqualityFn(useBuildingStore, selector, isEqual)
+}
 
 function seedDemoFloor(floor: Floor): Floor {
   const v1 = { id: createId('v'), x: 0, y: 0 }

@@ -67,6 +67,7 @@ export function PropertiesPanel() {
   const updateFloorPlate = useBuildingStore((s) => s.updateFloorPlate)
   const setFloorPlateMaterial = useBuildingStore((s) => s.setFloorPlateMaterial)
   const updatePlacedObject = useBuildingStore((s) => s.updatePlacedObject)
+  const copySelectedObject = useBuildingStore((s) => s.copySelectedObject)
   const updatePipeSegment = useBuildingStore((s) => s.updatePipeSegment)
   const updatePipeNode = useBuildingStore((s) => s.updatePipeNode)
   const setPipeDiameterMm = useBuildingStore((s) => s.setPipeDiameterMm)
@@ -948,10 +949,13 @@ export function PropertiesPanel() {
               type="number"
               step={0.05}
               value={placedObject.x}
+              onFocus={() => pushHistory()}
               onChange={(e) =>
-                updatePlacedObject(placedObject.id, {
-                  x: Number(e.target.value),
-                })
+                updatePlacedObject(
+                  placedObject.id,
+                  { x: Number(e.target.value) },
+                  { history: false },
+                )
               }
             />
           </label>
@@ -961,10 +965,13 @@ export function PropertiesPanel() {
               type="number"
               step={0.05}
               value={placedObject.y}
+              onFocus={() => pushHistory()}
               onChange={(e) =>
-                updatePlacedObject(placedObject.id, {
-                  y: Number(e.target.value),
-                })
+                updatePlacedObject(
+                  placedObject.id,
+                  { y: Number(e.target.value) },
+                  { history: false },
+                )
               }
             />
           </label>
@@ -975,10 +982,13 @@ export function PropertiesPanel() {
               step={0.05}
               min={0}
               value={placedObject.elevation}
+              onFocus={() => pushHistory()}
               onChange={(e) =>
-                updatePlacedObject(placedObject.id, {
-                  elevation: Math.max(0, Number(e.target.value)),
-                })
+                updatePlacedObject(
+                  placedObject.id,
+                  { elevation: Math.max(0, Number(e.target.value)) },
+                  { history: false },
+                )
               }
             />
           </label>
@@ -988,10 +998,13 @@ export function PropertiesPanel() {
               type="number"
               step={5}
               value={Math.round((placedObject.rotationY * 180) / Math.PI)}
+              onFocus={() => pushHistory()}
               onChange={(e) =>
-                updatePlacedObject(placedObject.id, {
-                  rotationY: (Number(e.target.value) * Math.PI) / 180,
-                })
+                updatePlacedObject(
+                  placedObject.id,
+                  { rotationY: (Number(e.target.value) * Math.PI) / 180 },
+                  { history: false },
+                )
               }
             />
           </label>
@@ -1003,10 +1016,13 @@ export function PropertiesPanel() {
               max={20}
               step={0.05}
               value={placedObject.scaleX}
+              onFocus={() => pushHistory()}
               onChange={(e) =>
-                updatePlacedObject(placedObject.id, {
-                  scaleX: Number(e.target.value),
-                })
+                updatePlacedObject(
+                  placedObject.id,
+                  { scaleX: Number(e.target.value) },
+                  { history: false },
+                )
               }
             />
           </label>
@@ -1018,10 +1034,13 @@ export function PropertiesPanel() {
               max={20}
               step={0.05}
               value={placedObject.scaleY}
+              onFocus={() => pushHistory()}
               onChange={(e) =>
-                updatePlacedObject(placedObject.id, {
-                  scaleY: Number(e.target.value),
-                })
+                updatePlacedObject(
+                  placedObject.id,
+                  { scaleY: Number(e.target.value) },
+                  { history: false },
+                )
               }
             />
           </label>
@@ -1033,10 +1052,13 @@ export function PropertiesPanel() {
               max={20}
               step={0.05}
               value={placedObject.scaleZ}
+              onFocus={() => pushHistory()}
               onChange={(e) =>
-                updatePlacedObject(placedObject.id, {
-                  scaleZ: Number(e.target.value),
-                })
+                updatePlacedObject(
+                  placedObject.id,
+                  { scaleZ: Number(e.target.value) },
+                  { history: false },
+                )
               }
             />
           </label>
@@ -1085,8 +1107,15 @@ export function PropertiesPanel() {
           )}
           <p className="muted">
             Drag — перемещение. Двойной клик по объекту — смена режима gizmo
-            (двигать / вращать / масштаб).
+            (двигать / вращать / масштаб). Ctrl+D — копия со смещением.
           </p>
+          <button
+            type="button"
+            onClick={copySelectedObject}
+            title="Скопировать объект (Ctrl+D)"
+          >
+            Копировать объект
+          </button>
           <ObjectTextureEditor
             objectId={placedObject.id}
             appearance={placedObject.appearance}

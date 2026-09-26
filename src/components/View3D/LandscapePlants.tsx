@@ -81,12 +81,15 @@ function PlantInstance({
 }
 
 export function LandscapePlants({ shadowsEnabled }: { shadowsEnabled: boolean }) {
-  const ground = useBuildingStore((s) =>
-    s.building.floors.find((f) => f.kind === 'ground'),
+  const plants = useBuildingStore(
+    (s) => s.building.floors.find((f) => f.kind === 'ground')?.plants,
+  )
+  const groundY = useBuildingStore(
+    (s) => s.building.floors.find((f) => f.kind === 'ground')?.elevation ?? 0,
   )
   const selection = useBuildingStore((s) => s.selection)
   const sceneMode = useBuildingStore((s) => s.sceneMode)
-  const plants = ground?.plants ?? []
+  const list = plants ?? []
 
   useFrame(({ clock }) => {
     const t = clock.elapsedTime
@@ -94,15 +97,15 @@ export function LandscapePlants({ shadowsEnabled }: { shadowsEnabled: boolean })
     tickEzTreeWind(t)
   })
 
-  if (!ground || plants.length === 0) return null
+  if (list.length === 0) return null
   void shadowsEnabled
   return (
     <group>
-      {plants.map((p) => (
+      {list.map((p) => (
         <PlantInstance
           key={p.id}
           plant={p}
-          groundY={ground.elevation}
+          groundY={groundY}
           selected={selection?.kind === 'plant' && selection.id === p.id}
         />
       ))}

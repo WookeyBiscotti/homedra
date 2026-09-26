@@ -61,13 +61,21 @@ export function TerrainGround({
   shadowsEnabled: boolean
   pickable: boolean
 }) {
-  const building = useBuildingStore((s) => s.building)
+  const landscapeTerrain = useBuildingStore(
+    (s) => s.building.floors.find((f) => f.kind === 'ground')?.landscapeTerrain,
+  )
+  const paint = useBuildingStore(
+    (s) => s.building.floors.find((f) => f.kind === 'ground')?.landscapePaint,
+  )
+  const groundY = useBuildingStore(
+    (s) => s.building.floors.find((f) => f.kind === 'ground')?.elevation ?? 0,
+  )
   const workbench = useBuildingStore((s) => s.workbench)
   const tool = useBuildingStore((s) => s.tool)
-  const ground = building.floors.find((f) => f.kind === 'ground')
-  const terrain = ensureTerrain(building, ground?.landscapeTerrain)
-  const paint = ground?.landscapePaint
-  const groundY = ground?.elevation ?? 0
+  const terrain = ensureTerrain(
+    useBuildingStore.getState().building,
+    landscapeTerrain,
+  )
   const res = terrain.resolution
   const frame = terrainFrame(terrain)
   const heights = useMemo(

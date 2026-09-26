@@ -33,6 +33,7 @@ export const TOOL_ICONS: Partial<Record<Tool, string>> = {
 export const UI_ICONS = {
   undo: publicUrl('icons/ui/undo.svg'),
   redo: publicUrl('icons/ui/redo.svg'),
+  copy: publicUrl('icons/ui/copy.svg'),
   delete: publicUrl('icons/tools/delete.svg'),
   merge: publicUrl('icons/tools/merge.svg'),
   visibility: {

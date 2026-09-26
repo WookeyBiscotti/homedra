@@ -31,6 +31,7 @@ export function FurnishWorkbench() {
   const setPendingModel = useBuildingStore((s) => s.setPendingModel)
   const setModelBrowserOpen = useBuildingStore((s) => s.setModelBrowserOpen)
   const deleteSelection = useBuildingStore((s) => s.deleteSelection)
+  const copySelectedObject = useBuildingStore((s) => s.copySelectedObject)
   const gizmoMode = useBuildingStore((s) => s.transformGizmoMode)
   const setGizmoMode = useBuildingStore((s) => s.setTransformGizmoMode)
   const objectSnapEnabled = useBuildingStore((s) => s.objectSnapEnabled)
@@ -351,7 +352,16 @@ export function FurnishWorkbench() {
           )}
 
           <div className="tool-actions">
-            <button type="button" onClick={deleteSelection}>
+            <button
+              type="button"
+              onClick={copySelectedObject}
+              disabled={!hasObject}
+              title="Скопировать выбранный объект (Ctrl+D)"
+            >
+              <IconImg src={UI_ICONS.copy} className="ui-icon" />
+              Копировать
+            </button>
+            <button type="button" onClick={deleteSelection} disabled={!hasObject}>
               <IconImg src={UI_ICONS.delete} className="ui-icon" />
               Удалить выделение
             </button>

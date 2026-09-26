@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { buildingFootprintHoles, extrudeFloorSlabs } from './extrude'
+import {
+  buildingFootprintHoles,
+  buildingMeshDeps,
+  extrudeFloorSlabs,
+} from './extrude'
 import {
   createEmptyFloor,
   createId,
@@ -248,5 +252,48 @@ describe('buildingFootprintHoles', () => {
       floors: [ground, f1],
     })
     expect(holes).toEqual([])
+  })
+})
+
+describe('buildingMeshDeps', () => {
+  it('stays stable when only placed objects change', () => {
+    const story = rectFloor()
+    const ground = createEmptyFloor('Земля', 0, 0, 'ground')
+    const before = {
+      id: 'b',
+      name: 't',
+      units: 'm' as const,
+      floors: [ground, story],
+    }
+    const after = {
+      ...before,
+      floors: [
+        ground,
+        {
+          ...story,
+          objects: [
+            {
+              id: 'obj',
+              model: { source: 'catalog' as const, assetId: 'x' },
+              x: 1,
+              y: 1,
+              elevation: 0,
+              rotationX: 0,
+              rotationY: 0,
+              rotationZ: 0,
+              scaleX: 2,
+              scaleY: 2,
+              scaleZ: 2,
+              sizeX: 1,
+              sizeY: 1,
+              sizeZ: 1,
+              planHalfX: 1,
+              planHalfY: 1,
+            },
+          ],
+        },
+      ],
+    }
+    expect(buildingMeshDeps(before)).toEqual(buildingMeshDeps(after))
   })
 })

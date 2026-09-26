@@ -621,6 +621,27 @@ export function normalizePlacedObject(
   }
 }
 
+/** Offset so a copy does not sit on top of the original (matches snap grid). */
+export const PLACED_OBJECT_COPY_OFFSET = 0.25
+
+/** New instance with a fresh id; appearance is deep-cloned. */
+export function clonePlacedObject(
+  obj: PlacedObject,
+  opts?: { offsetX?: number; offsetY?: number },
+): PlacedObject {
+  const offsetX = opts?.offsetX ?? PLACED_OBJECT_COPY_OFFSET
+  const offsetY = opts?.offsetY ?? PLACED_OBJECT_COPY_OFFSET
+  return {
+    ...obj,
+    id: createId('obj'),
+    x: obj.x + offsetX,
+    y: obj.y + offsetY,
+    model: { ...obj.model },
+    attribution: obj.attribution ? { ...obj.attribution } : undefined,
+    appearance: obj.appearance ? structuredClone(obj.appearance) : undefined,
+  }
+}
+
 export type TransformGizmoMode = 'translate' | 'rotate' | 'scale'
 
 export interface Building {

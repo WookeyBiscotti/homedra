@@ -163,6 +163,7 @@ export default function App() {
   const undo = useBuildingStore((s) => s.undo)
   const redo = useBuildingStore((s) => s.redo)
   const deleteSelection = useBuildingStore((s) => s.deleteSelection)
+  const copySelectedObject = useBuildingStore((s) => s.copySelectedObject)
   const mergeSelectedVertices = useBuildingStore((s) => s.mergeSelectedVertices)
   const cancelWallDraft = useBuildingStore((s) => s.cancelWallDraft)
   const cancelOpeningDraft = useBuildingStore((s) => s.cancelOpeningDraft)
@@ -189,6 +190,11 @@ export default function App() {
       if (mod && (key === 'y' || (key === 'z' && e.shiftKey))) {
         e.preventDefault()
         redo()
+        return
+      }
+      if (mod && (key === 'd' || key === 'c') && selection?.kind === 'object') {
+        e.preventDefault()
+        copySelectedObject()
         return
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -302,6 +308,7 @@ export default function App() {
     undo,
     redo,
     deleteSelection,
+    copySelectedObject,
     mergeSelectedVertices,
     cancelWallDraft,
     cancelOpeningDraft,

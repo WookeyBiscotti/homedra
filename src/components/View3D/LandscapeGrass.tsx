@@ -6,11 +6,35 @@ import { decodeBytes } from '../../landscape/maps'
 import { GRASS_INSTANCE_CAP, layoutGrass } from '../../landscape/grassField'
 import { grassLayers } from '../../landscape/grassLayers'
 import { ensureTerrain, terrainFrame } from '../../landscape/terrain'
-import { buildingFootprintHoles } from '../../engine/extrude'
-import type { LandscapeGrassLayer } from '../../engine/types'
-import { SEEDTHREE_GRASS_DEFAULTS } from '../../engine/types'
-import { useBuildingStore } from '../../store/buildingStore'
+import {
+  buildingFootprintHoles,
+  buildingMeshDeps,
+} from '../../engine/extrude'
+import {
+  SEEDTHREE_GRASS_DEFAULTS,
+  type Building,
+  type LandscapeGrassLayer,
+} from '../../engine/types'
+import { useRefMemo } from '../../hooks/useRefMemo'
+import { useBuildingEqual } from '../../store/buildingStore'
 import { disableRaycast } from './PaintPickables'
+
+function grassSceneEqual(a: Building, b: Building): boolean {
+  if (a === b) return true
+  const ga = a.floors.find((f) => f.kind === 'ground')
+  const gb = b.floors.find((f) => f.kind === 'ground')
+  if (ga?.landscapeGrass !== gb?.landscapeGrass) return false
+  if (ga?.landscapeTerrain !== gb?.landscapeTerrain) return false
+  if (ga?.plants !== gb?.plants) return false
+  if (ga?.elevation !== gb?.elevation) return false
+  const da = buildingMeshDeps(a)
+  const db = buildingMeshDeps(b)
+  if (da.length !== db.length) return false
+  for (let i = 0; i < da.length; i++) {
+    if (da[i] !== db[i]) return false
+  }
+  return true
+}
 
 function tuftGeometry(planes: number, width: number): THREE.BufferGeometry {
   const positions: number[] = []
@@ -145,12 +169,15 @@ function GrassLayerMesh({
 }
 
 export function LandscapeGrass({ visit }: { visit: boolean }) {
-  const building = useBuildingStore((s) => s.building)
+  const building = useBuildingEqual((s) => s.building, grassSceneEqual)
   const ground = building.floors.find((f) => f.kind === 'ground')
   const grass = ground?.landscapeGrass
   const layers = grassLayers(grass)
   const terrain = ensureTerrain(building, ground?.landscapeTerrain)
-  const holes = useMemo(() => buildingFootprintHoles(building), [building])
+  const holes = useRefMemo(
+    () => buildingFootprintHoles(building),
+    buildingMeshDeps(building),
+  )
   const res = grass?.resolution ?? 256
   const cap = Math.max(4000, Math.floor(GRASS_INSTANCE_CAP / Math.max(1, layers.length)))
 
@@ -173,7 +200,19 @@ export function LandscapeGrass({ visit }: { visit: boolean }) {
         }),
       }
     })
-  }, [ground, layers, res, terrain, holes, cap])
+    // `ground` identity changes on furniture edits; keep grass/terrain/plants.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    grass,
+    layers,
+    res,
+    terrain,
+    holes,
+    cap,
+    ground?.elevation,
+    ground?.plants,
+    ground?.landscapeTerrain,
+  ])
 
   const geos = useMemo(
     () => [tuftGeometry(2, 1), tuftGeometry(3, 0.6)] as const,

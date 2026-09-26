@@ -2,8 +2,9 @@ import { Edges } from '@react-three/drei'
 import type { ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
 import { wallEndpoints, worldHitInWallOpening } from '../../engine/geometry/openings'
+import { sameBuildingPicks } from '../../engine/extrude'
 import { isFloorRendered, isWallSelected, normalizeFloorVisibility } from '../../engine/types'
-import { useBuildingStore } from '../../store/buildingStore'
+import { useBuildingEqual, useBuildingStore } from '../../store/buildingStore'
 import { useMemo } from 'react'
 
 const SELECTED = '#c45c26'
@@ -95,7 +96,7 @@ function WallPickMesh({
 
 /** Clickable volumes for walls in 3D (works without applied textures). */
 export function WallPickables() {
-  const building = useBuildingStore((s) => s.building)
+  const building = useBuildingEqual((s) => s.building, sameBuildingPicks)
   const selection = useBuildingStore((s) => s.selection)
 
   return (

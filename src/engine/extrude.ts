@@ -356,6 +356,53 @@ export function buildingFootprintHoles(
     .map((ring) => ring.map((p) => ({ x: p.x, z: p.y })))
 }
 
+/**
+ * Identity of fields that affect wall/slab meshes and building bounds.
+ * Object, plant, MEP and landscape edits must not remesh the building.
+ */
+export function floorMeshDeps(floor: Floor): readonly unknown[] {
+  return [
+    floor.id,
+    floor.kind,
+    floor.elevation,
+    floor.height,
+    floor.slabThickness,
+    floor.vertices,
+    floor.walls,
+    floor.openings,
+    floor.slabOpenings,
+    floor.plates,
+  ]
+}
+
+export function buildingMeshDeps(building: Building): readonly unknown[] {
+  return building.floors.flatMap(floorMeshDeps)
+}
+
+/** True when wall/opening pick volumes can keep the previous React tree. */
+export function sameBuildingPicks(a: Building, b: Building): boolean {
+  if (a === b) return true
+  if (a.floors.length !== b.floors.length) return false
+  for (let i = 0; i < a.floors.length; i++) {
+    const fa = a.floors[i]!
+    const fb = b.floors[i]!
+    if (
+      fa.id !== fb.id ||
+      fa.kind !== fb.kind ||
+      fa.elevation !== fb.elevation ||
+      fa.height !== fb.height ||
+      fa.visible !== fb.visible ||
+      fa.vertices !== fb.vertices ||
+      fa.walls !== fb.walls ||
+      fa.openings !== fb.openings ||
+      fa.slabOpenings !== fb.slabOpenings
+    ) {
+      return false
+    }
+  }
+  return true
+}
+
 export function extrudeBuilding(building: Building): {
   floors: FloorWallSolid[]
   slabs: FloorSlab[]

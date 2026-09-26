@@ -2,6 +2,7 @@ import { TransformControls, useGLTF } from '@react-three/drei'
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import {
   Component,
+  memo,
   Suspense,
   useEffect,
   useLayoutEffect,
@@ -12,7 +13,12 @@ import {
   type RefObject,
 } from 'react'
 import * as THREE from 'three'
-import type { Floor, ModelRef, PlacedObject } from '../../engine/types'
+import {
+  estimatePlanHalf,
+  type Floor,
+  type ModelRef,
+  type PlacedObject,
+} from '../../engine/types'
 import { heightAt } from '../../landscape/terrain'
 import { snapObjectXY, planHalfSizeOf } from '../../engine/geometry/objectSnap'
 import { resolveModelRef } from '../../models/resolveModel'
@@ -35,10 +41,17 @@ const AABB_COLOR = '#c45c26'
 /** World-space AABB wireframe, updated every frame while the target moves. */
 function SelectionAabb({
   targetRef,
+  sizeX,
+  sizeY,
+  sizeZ,
 }: {
   targetRef: RefObject<THREE.Object3D | null>
+  sizeX: number
+  sizeY: number
+  sizeZ: number
 }) {
   const box = useMemo(() => new THREE.Box3(), [])
+  const local = useMemo(() => new THREE.Box3(), [])
   const helper = useMemo(() => {
     const h = new THREE.Box3Helper(box, new THREE.Color(AABB_COLOR))
     h.raycast = () => {}
@@ -48,7 +61,13 @@ function SelectionAabb({
   useFrame(() => {
     const target = targetRef.current
     if (!target) return
-    box.setFromObject(target)
+    // Parent matrix only — setFromObject walks every skinned/mesh vertex.
+    target.updateWorldMatrix(true, false)
+    const hx = Math.max(0.05, sizeX / 2)
+    const hz = Math.max(0.05, sizeZ / 2)
+    local.min.set(-hx, 0, -hz)
+    local.max.set(hx, Math.max(0.05, sizeY), hz)
+    box.copy(local).applyMatrix4(target.matrixWorld)
     if (box.isEmpty()) return
     helper.updateMatrixWorld(true)
   })
@@ -161,11 +180,9 @@ function GlbInstance({
   const cycleTransformGizmoMode = useBuildingStore(
     (s) => s.cycleTransformGizmoMode,
   )
-  const dragging = useBuildingStore((s) => s.transformDragging)
   const sceneMode = useBuildingStore((s) => s.sceneMode)
   const pendingModel = useBuildingStore((s) => s.pendingModel)
   const objectSnapEnabled = useBuildingStore((s) => s.objectSnapEnabled)
-  const floor = useBuildingStore((s) => s.activeFloor())
   const xyDragCleanup = useRef<(() => void) | null>(null)
   /** Local flag so we don't skip applyPlacedTransform after store catch-up */
   const xyDragging = useRef(false)
@@ -276,46 +293,45 @@ function GlbInstance({
   }, [obj.id, scene])
 
   useLayoutEffect(() => {
-    if (!groupRef.current || dragging || xyDragging.current) return
+    if (!groupRef.current) return
+    if (useBuildingStore.getState().transformDragging || xyDragging.current) {
+      return
+    }
     applyPlacedTransform(groupRef.current, obj, floorElevation, terrainLift)
-  }, [obj, floorElevation, terrainLift, dragging])
+    // Primitive pose fields only — full `obj` changes on AABB/size writes.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    obj.x,
+    obj.y,
+    obj.elevation,
+    obj.rotationX,
+    obj.rotationY,
+    obj.rotationZ,
+    obj.scaleX,
+    obj.scaleY,
+    obj.scaleZ,
+    floorElevation,
+    terrainLift,
+  ])
 
-  // Publish live + persisted plan AABB from the same world box as the 3D helper.
+  // Local model size is independent of instance scale — measure once per mesh.
   useLayoutEffect(() => {
     const g = groupRef.current
-    if (!g || dragging || xyDragging.current) return
-    applyPlacedTransform(g, obj, floorElevation, terrainLift)
-    const box = new THREE.Box3().setFromObject(g)
-    if (box.isEmpty()) return
-
-    const planHalfX = Math.max(0.05, (box.max.x - box.min.x) / 2)
-    const planHalfY = Math.max(0.05, (box.max.z - box.min.z) / 2)
-    setLivePlanHalf(obj.id, { x: planHalfX, y: planHalfY })
-
+    if (!g) return
     const local = measureLocalModelSize(g, scene)
-    const sizePatch =
-      local &&
-      (Math.abs(obj.sizeX - local.x) > 0.03 ||
-        Math.abs(obj.sizeY - local.y) > 0.03 ||
-        Math.abs(obj.sizeZ - local.z) > 0.03)
-        ? { sizeX: local.x, sizeY: local.y, sizeZ: local.z }
-        : null
-    const aabbStale =
-      Math.abs(obj.planHalfX - planHalfX) > 0.02 ||
-      Math.abs(obj.planHalfY - planHalfY) > 0.02
-
-    if (!sizePatch && !aabbStale) return
-
+    if (!local) return
+    if (
+      Math.abs(obj.sizeX - local.x) <= 0.03 &&
+      Math.abs(obj.sizeY - local.y) <= 0.03 &&
+      Math.abs(obj.sizeZ - local.z) <= 0.03
+    ) {
+      return
+    }
     useBuildingStore.setState((st) => {
       const floor = st.activeFloor()
       const objects = (floor.objects ?? []).map((o) =>
         o.id === obj.id
-          ? {
-              ...o,
-              ...(sizePatch ?? {}),
-              planHalfX,
-              planHalfY,
-            }
+          ? { ...o, sizeX: local.x, sizeY: local.y, sizeZ: local.z }
           : o,
       )
       return {
@@ -327,7 +343,32 @@ function GlbInstance({
         },
       }
     })
-  }, [obj, floorElevation, terrainLift, scene, dragging])
+    // Only when the cloned scene is ready; size does not depend on scale.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [scene, obj.id])
+
+  useLayoutEffect(() => {
+    if (useBuildingStore.getState().transformDragging || xyDragging.current) {
+      return
+    }
+    setLivePlanHalf(
+      obj.id,
+      estimatePlanHalf({
+        sizeX: obj.sizeX,
+        sizeZ: obj.sizeZ,
+        scaleX: obj.scaleX,
+        scaleZ: obj.scaleZ,
+        rotationY: obj.rotationY,
+      }),
+    )
+  }, [
+    obj.id,
+    obj.sizeX,
+    obj.sizeZ,
+    obj.scaleX,
+    obj.scaleZ,
+    obj.rotationY,
+  ])
 
   useEffect(() => {
     return () => {
@@ -344,17 +385,17 @@ function GlbInstance({
   const snapPlanXY = (x: number, y: number) => {
     if (!objectSnapEnabled) return { x, y, snappedX: false, snappedY: false }
     const g = groupRef.current
-    let halfSize = planHalfSizeOf(obj)
-    if (g) {
-      const box = new THREE.Box3().setFromObject(g)
-      if (!box.isEmpty()) {
-        halfSize = {
-          x: Math.max(0.05, (box.max.x - box.min.x) / 2),
-          y: Math.max(0.05, (box.max.z - box.min.z) / 2),
-        }
-        setLivePlanHalf(obj.id, halfSize)
-      }
-    }
+    const halfSize = g
+      ? estimatePlanHalf({
+          sizeX: obj.sizeX,
+          sizeZ: obj.sizeZ,
+          scaleX: g.scale.x,
+          scaleZ: g.scale.z,
+          rotationY: g.rotation.y,
+        })
+      : planHalfSizeOf(obj)
+    setLivePlanHalf(obj.id, halfSize)
+    const floor = useBuildingStore.getState().activeFloor()
     return snapObjectXY(floor, x, y, {
       excludeObjectId: obj.id,
       halfSize,
@@ -515,7 +556,14 @@ function GlbInstance({
           />
         </mesh>
       </group>
-      {showGizmo && <SelectionAabb targetRef={groupRef} />}
+      {showGizmo && (
+        <SelectionAabb
+          targetRef={groupRef}
+          sizeX={obj.sizeX}
+          sizeY={obj.sizeY}
+          sizeZ={obj.sizeZ}
+        />
+      )}
       {showGizmo && (
         <TransformControls
           key={`${obj.id}-${gizmoMode}`}
@@ -583,7 +631,7 @@ function PlaceholderObject({
   )
 }
 
-function ResolvedObject({
+const ResolvedObject = memo(function ResolvedObject({
   obj,
   floorId,
   floorElevation,
@@ -669,7 +717,7 @@ function ResolvedObject({
       </Suspense>
     </GlbErrorBoundary>
   )
-}
+})
 
 /** Floor click target for placing objects in 3D. */
 export function PlaceObjectFloorHit({
