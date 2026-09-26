@@ -14,15 +14,19 @@ describe('proxiedTextureUrl', () => {
     )
   })
 
-  it('rewrites remote images through /proxy/tex', () => {
+  it('rewrites remote images through /proxy/tex in dev', () => {
     expect(proxiedTextureUrl('https://cdn.example/wood.jpg')).toBe(
-      '/proxy/tex?url=https%3A%2F%2Fcdn.example%2Fwood.jpg',
+      import.meta.env.DEV
+        ? '/proxy/tex?url=https%3A%2F%2Fcdn.example%2Fwood.jpg'
+        : 'https://cdn.example/wood.jpg',
     )
   })
 
   it('does not change the model proxy path helper', () => {
     expect(proxiedAssetUrl('https://dl.polyhaven.org/a.glb')).toBe(
-      '/proxy/ext?url=https%3A%2F%2Fdl.polyhaven.org%2Fa.glb',
+      import.meta.env.DEV
+        ? '/proxy/ext?url=https%3A%2F%2Fdl.polyhaven.org%2Fa.glb'
+        : 'https://dl.polyhaven.org/a.glb',
     )
   })
 })

@@ -14,6 +14,7 @@ import {
   writeLibraryTokens,
   type LibraryTokens,
 } from '../models/tokens'
+import { proxiedAssetUrl } from '../models/proxyUrl'
 import { useBuildingStore } from '../store/buildingStore'
 
 const KEYS = LIBRARY_TOKEN_KEYS
@@ -164,9 +165,9 @@ export function LibraryTokensSettings() {
                     api_key: tokens.smithsonian,
                   })
                   const res = await fetch(
-                    `/proxy/ext?url=${encodeURIComponent(
+                    proxiedAssetUrl(
                       `https://api.si.edu/openaccess/api/v1.0/search?${q}`,
-                    )}`,
+                    ),
                   )
                   lines.push(
                     res.ok
@@ -180,9 +181,7 @@ export function LibraryTokensSettings() {
               if (tokens.sketchfab) {
                 try {
                   const res = await fetch(
-                    `/proxy/ext?url=${encodeURIComponent(
-                      'https://api.sketchfab.com/v3/me',
-                    )}`,
+                    proxiedAssetUrl('https://api.sketchfab.com/v3/me'),
                     {
                       headers: {
                         Authorization: `Token ${tokens.sketchfab}`,
@@ -206,9 +205,7 @@ export function LibraryTokensSettings() {
                     per_page: '3',
                   })
                   const res = await fetch(
-                    `/proxy/ext?url=${encodeURIComponent(
-                      `https://pixabay.com/api/?${q}`,
-                    )}`,
+                    proxiedAssetUrl(`https://pixabay.com/api/?${q}`),
                   )
                   lines.push(
                     res.ok ? 'Pixabay: OK' : `Pixabay: ${res.status}`,
@@ -220,9 +217,9 @@ export function LibraryTokensSettings() {
               if (tokens.pexels) {
                 try {
                   const res = await fetch(
-                    `/proxy/ext?url=${encodeURIComponent(
+                    proxiedAssetUrl(
                       'https://api.pexels.com/v1/search?query=texture&per_page=1',
-                    )}`,
+                    ),
                     { headers: { Authorization: tokens.pexels } },
                   )
                   lines.push(
