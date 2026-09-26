@@ -55,7 +55,9 @@ import { PaintPickables, disableRaycast } from './PaintPickables'
 import { PbrStandardMaterial } from './PbrStandardMaterial'
 import { VisitControls, type VisitActiveState } from './VisitControls'
 import { WallPickables } from './WallPickables'
+import { FloorVolumeBoxes } from './VolumeBoxes'
 import { PlaceObjectFloorHit, PlacedObjects } from './PlacedObjects'
+import { FloorPlacedTiles, TileLayPickables } from './PlacedTiles'
 import { MepNetworks } from './MepNetworks'
 import { TerrainGround } from './TerrainGround'
 import { LandscapePlants } from './LandscapePlants'
@@ -168,7 +170,11 @@ function pickPriority(kind: string | undefined): number {
       return 0
     case 'opening':
     case 'slabOpening':
+    case 'volumeCutout':
+    case 'tile':
       return 1
+    case 'volumeBox':
+      return 2
     case 'mep':
       return 2
     case 'wall':
@@ -180,12 +186,22 @@ function pickPriority(kind: string | undefined): number {
 }
 
 /** Paint: only paintTarget. Otherwise prefer objects/openings over wall volumes. */
-function PointerEventFilter({ painting }: { painting: boolean }) {
+function PointerEventFilter({
+  painting,
+  tiling,
+}: {
+  painting: boolean
+  tiling: boolean
+}) {
   const setEvents = useThree((s) => s.setEvents)
   useEffect(() => {
     if (painting) {
       setEvents({
         filter: (hits) => hits.filter((h) => h.object.userData?.paintTarget),
+      })
+    } else if (tiling) {
+      setEvents({
+        filter: (hits) => hits.filter((h) => h.object.userData?.tileTarget || h.object.userData?.pickKind === 'tile'),
       })
     } else {
       setEvents({
@@ -203,7 +219,7 @@ function PointerEventFilter({ painting }: { painting: boolean }) {
       })
     }
     return () => setEvents({ filter: (hits) => hits })
-  }, [painting, setEvents])
+  }, [painting, tiling, setEvents])
   return null
 }
 
@@ -966,6 +982,11 @@ function SceneContent({
   const painting = sceneMode === 'paint'
   const placing =
     !visit && !painting && tool === 'placeObject' && pendingModel != null
+  const tilingLay =
+    !visit &&
+    !painting &&
+    workbench === 'tiling' &&
+    (tool === 'placeTile' || tool === 'fillTile')
   const landscaping =
     !visit && !painting && workbench === 'landscape'
   const routing =
@@ -1071,7 +1092,7 @@ function SceneContent({
   return (
     <>
       <ToneMappingSetup exposure={lighting.exposure} />
-      <PointerEventFilter painting={painting} />
+      <PointerEventFilter painting={painting} tiling={tilingLay} />
       <color attach="background" args={[lighting.skyColor]} />
       <fog attach="fog" args={[lighting.skyColor, 40, 110]} />
 
@@ -1140,15 +1161,38 @@ function SceneContent({
               exterior={finishExterior}
               shadowsEnabled={lighting.shadowsEnabled}
               ghost={ghost}
-              pickable={!painting && !placing && !routing && !landscaping}
+              pickable={!painting && !placing && !routing && !landscaping && !tilingLay}
             />
             <FloorFinishes
               floorId={f.floorId}
               shadowsEnabled={lighting.shadowsEnabled}
               ghost={ghost}
             />
+            {floorData && (
+              <FloorVolumeBoxes
+                floor={floorData}
+                dimmed={ghost || floorData.id !== activeFloorId}
+                shadowsEnabled={lighting.shadowsEnabled}
+                pickable={!painting && !placing && !routing && !landscaping && !tilingLay}
+              />
+            )}
             {painting && f.floorId === activeFloorId && (
               <PaintPickables floorId={f.floorId} />
+            )}
+            {floorData && (
+              <FloorPlacedTiles
+                floor={floorData}
+                dimmed={ghost || floorData.id !== activeFloorId}
+                shadowsEnabled={lighting.shadowsEnabled}
+                pickable={
+                  !painting &&
+                  !placing &&
+                  !routing &&
+                  !landscaping &&
+                  workbench === 'tiling' &&
+                  !tilingLay
+                }
+              />
             )}
             {floorData && (
               <PlacedObjects
@@ -1164,17 +1208,21 @@ function SceneContent({
           activeFloorId={activeFloorId}
           shadowsEnabled={lighting.shadowsEnabled}
           visibilityByFloor={visibilityByFloor}
-          pickable={!painting && !placing && !routing && !landscaping}
+          pickable={!painting && !placing && !routing && !landscaping && !tilingLay}
         />
-        {!visit && !painting && !placing && !routing && workbench !== 'landscape' && (
-          <WallPickables />
-        )}
+        {!visit &&
+          !painting &&
+          !placing &&
+          !routing &&
+          !tilingLay &&
+          workbench !== 'landscape' && <WallPickables />}
         {!visit &&
           !painting &&
           !placing &&
           !routing &&
           workbench !== 'landscape' &&
-          workbench !== 'furnish' && (
+          workbench !== 'furnish' &&
+          !tilingLay && (
           <OpeningPickables showSlabs />
         )}
         {!visit &&
@@ -1194,6 +1242,9 @@ function SceneContent({
           activeFloor.kind !== 'ground' && (
             <PlaceObjectFloorHit floor={activeFloor} />
           )}
+        {tilingLay && activeFloor && activeFloor.kind !== 'ground' && (
+          <TileLayPickables floor={activeFloor} />
+        )}
       </group>
 
       {visit ? (

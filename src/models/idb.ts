@@ -1,7 +1,7 @@
 /** Shared IndexedDB open helper for models / assets / collection. */
 
 const DB_NAME = 'interior-models'
-const DB_VERSION = 4
+const DB_VERSION = 5
 
 export const STORE_MODELS = 'models'
 export const STORE_ASSETS = 'assets'
@@ -10,6 +10,8 @@ export const STORE_ITEMS = 'collectionItems'
 export const STORE_TEXTURES = 'textures'
 export const STORE_TEX_FOLDERS = 'textureFolders'
 export const STORE_TEX_ITEMS = 'textureItems'
+export const STORE_TILE_FOLDERS = 'tileFolders'
+export const STORE_TILE_ITEMS = 'tileItems'
 
 export function openModelsDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -41,6 +43,13 @@ export function openModelsDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORE_TEX_ITEMS)) {
         const texItems = db.createObjectStore(STORE_TEX_ITEMS, { keyPath: 'id' })
         texItems.createIndex('folderId', 'folderId', { unique: false })
+      }
+      if (!db.objectStoreNames.contains(STORE_TILE_FOLDERS)) {
+        db.createObjectStore(STORE_TILE_FOLDERS, { keyPath: 'id' })
+      }
+      if (!db.objectStoreNames.contains(STORE_TILE_ITEMS)) {
+        const tileItems = db.createObjectStore(STORE_TILE_ITEMS, { keyPath: 'id' })
+        tileItems.createIndex('folderId', 'folderId', { unique: false })
       }
     }
   })

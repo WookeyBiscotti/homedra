@@ -25,6 +25,7 @@ import {
   type WallSide,
 } from '../../engine/types'
 import { useBuildingStore } from '../../store/buildingStore'
+import { PaintVolumeBox, PaintVolumeCutout } from './VolumeBoxes'
 
 const HOVER = '#c45c26'
 const WALL_HIT_FLOOR_CLEARANCE = 0.22
@@ -462,6 +463,22 @@ export function PaintPickables({ floorId }: { floorId: string }) {
           floor={floor}
           opening={item.opening}
           hasFinish={item.hasFinish}
+        />
+      ))}
+      {(floor.boxes ?? []).map((box) => (
+        <PaintVolumeBox
+          key={`box-${box.id}`}
+          floor={floor}
+          boxId={box.id}
+          hasFinish={!!box.material}
+        />
+      ))}
+      {(floor.boxCutouts ?? []).map((cut) => (
+        <PaintVolumeCutout
+          key={`cut-${cut.id}`}
+          floor={floor}
+          cutId={cut.id}
+          hasFinish={!!cut.material}
         />
       ))}
     </group>

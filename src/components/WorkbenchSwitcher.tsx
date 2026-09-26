@@ -33,6 +33,11 @@ const WORKBENCHES: { id: Workbench; label: string; hint: string }[] = [
     label: 'Ландшафт',
     hint: 'Рельеф, грунт, растения и трава',
   },
+  {
+    id: 'tiling',
+    label: 'Плитка',
+    hint: 'Укладка плитки на пол, стены и короба',
+  },
 ]
 
 export function WorkbenchSwitcher() {

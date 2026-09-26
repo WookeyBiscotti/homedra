@@ -12,8 +12,10 @@ const OPTIONS: { key: keyof CopyFloorOptions; label: string }[] = [
   { key: 'passages', label: 'Проёмы' },
   { key: 'stairs', label: 'Проёмы лестниц' },
   { key: 'plates', label: 'Полы без стен' },
+  { key: 'boxes', label: 'Коробы' },
   { key: 'pipes', label: 'Трубы' },
   { key: 'cables', label: 'Электрика' },
+  { key: 'tiles', label: 'Плитка' },
 ]
 
 interface CopyFloorOptionsFormProps {
@@ -70,8 +72,10 @@ export function CopyFloorOptionsForm({
     options.passages ||
     options.stairs ||
     options.plates ||
+    options.boxes ||
     options.pipes ||
-    options.cables
+    options.cables ||
+    options.tiles
 
   return (
     <div className="copy-floor-form" role="dialog" aria-label={title}>

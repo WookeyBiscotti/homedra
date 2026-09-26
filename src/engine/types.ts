@@ -140,6 +140,40 @@ export interface FloorPlate {
   material?: MaterialRef | null
 }
 
+/**
+ * Architectural volume (soffit / bulkhead / podium). Axis-aligned in plan.
+ * Elevation is above the story walking surface.
+ */
+export interface VolumeBox {
+  id: Id
+  x: number
+  y: number
+  width: number
+  depth: number
+  /** Bottom above walking surface, meters */
+  elevation: number
+  height: number
+  /** Outer faces (sides, top, bottom). */
+  material?: MaterialRef | null
+}
+
+/**
+ * Prism cutout subtracted from a volume box. Axis-aligned in plan.
+ * Elevation / height are above the walking surface (same space as the box).
+ */
+export interface VolumeCutout {
+  id: Id
+  boxId: Id
+  x: number
+  y: number
+  width: number
+  depth: number
+  elevation: number
+  height: number
+  /** Reveal faces of the cut. */
+  material?: MaterialRef | null
+}
+
 /** Hidden MEP route: inside a wall or inside the floor slab. */
 export type MepAnchor =
   | { type: 'wall'; wallId: Id; offset: number }
@@ -370,6 +404,12 @@ export interface Floor {
   slabOpenings: SlabOpening[]
   /** Free floor plates (slab without walls). */
   plates?: FloorPlate[]
+  /** Architectural boxes (коробы). */
+  boxes?: VolumeBox[]
+  /** Cutouts subtracted from boxes. */
+  boxCutouts?: VolumeCutout[]
+  /** Discrete tiles laid on floors, walls, or box faces. */
+  tiles?: PlacedTile[]
   /** Room key (closed wall cycle) → floor finish. */
   roomFloorMaterials?: Record<string, MaterialRef>
   /** Placed 3D objects (furniture / props) on this floor. */
@@ -651,6 +691,168 @@ export interface Building {
   floors: Floor[]
 }
 
+/** Face of an axis-aligned volume box. */
+export type BoxFace = 'posX' | 'negX' | 'posY' | 'negY' | 'top' | 'bottom'
+
+export type TileSurface =
+  | { type: 'floor' }
+  | { type: 'wall'; wallId: Id; side: WallSide }
+  | { type: 'box'; boxId: Id; face: BoxFace }
+
+export type TileFillPattern = 'straight' | 'offset'
+
+/** Sub-rectangle of the material image used as the tile face (image space, top-left origin). */
+export type TileTexRegion = {
+  u0: number
+  v0: number
+  u1: number
+  v1: number
+}
+
+export function defaultTileTexRegion(): TileTexRegion {
+  return { u0: 0, v0: 0, u1: 1, v1: 1 }
+}
+
+export function normalizeTileTexRegion(
+  raw?: Partial<TileTexRegion> | null,
+): TileTexRegion {
+  const clamp01 = (n: number) => Math.min(1, Math.max(0, n))
+  const u0 = clamp01(Number(raw?.u0) || 0)
+  const v0 = clamp01(Number(raw?.v0) || 0)
+  const u1 = clamp01(raw?.u1 == null ? 1 : Number(raw.u1))
+  const v1 = clamp01(raw?.v1 == null ? 1 : Number(raw.v1))
+  const min = 0.04
+  let a = Math.min(u0, u1)
+  let b = Math.max(u0, u1)
+  let c = Math.min(v0, v1)
+  let d = Math.max(v0, v1)
+  if (b - a < min) {
+    const mid = (a + b) / 2
+    a = Math.max(0, mid - min / 2)
+    b = Math.min(1, a + min)
+    a = Math.max(0, b - min)
+  }
+  if (d - c < min) {
+    const mid = (c + d) / 2
+    c = Math.max(0, mid - min / 2)
+    d = Math.min(1, c + min)
+    c = Math.max(0, d - min)
+  }
+  return { u0: a, v0: c, u1: b, v1: d }
+}
+
+export function isFullTexRegion(region?: TileTexRegion | null): boolean {
+  if (!region) return true
+  const r = normalizeTileTexRegion(region)
+  return r.u0 <= 1e-4 && r.v0 <= 1e-4 && r.u1 >= 1 - 1e-4 && r.v1 >= 1 - 1e-4
+}
+
+/** Catalog / editor spec for a ceramic tile. */
+export interface TileSpec {
+  name: string
+  /** Meters along local U. */
+  width: number
+  /** Meters along local V. */
+  length: number
+  /** Thickness outward from the host face, meters. */
+  thickness: number
+  material: MaterialRef
+  /** Which part of the texture image is printed on the tile face. */
+  texRegion?: TileTexRegion
+}
+
+/** One laid tile. Spec is snapshotted so the project stays self-contained. */
+export interface PlacedTile extends TileSpec {
+  id: Id
+  surface: TileSurface
+  /** Center in the host face UV. */
+  u: number
+  v: number
+  /** 0 or π/2 (and 180/270 as multiples). */
+  rotation: number
+  groutM: number
+  /** Local polygon after a cut; omitted = full rectangle. */
+  clip?: Array<{ x: number; y: number }>
+}
+
+export const DEFAULT_TILE_GROUT_M = 0.002
+export const DEFAULT_TILE_THICKNESS = 0.008
+export const MIN_TILE_AREA = 0.002
+
+export function defaultTileSpec(): TileSpec {
+  return {
+    name: '30×30',
+    width: 0.3,
+    length: 0.3,
+    thickness: DEFAULT_TILE_THICKNESS,
+    material: defaultMaterialRef('Tiles141', 0.3),
+  }
+}
+
+export function normalizeTileRotation(radians: number): number {
+  const step = Math.PI / 2
+  const q = Math.round(radians / step)
+  const wrapped = ((q % 4) + 4) % 4
+  return wrapped * step
+}
+
+export function tileAxesSwapped(rotation: number): boolean {
+  const q = Math.round(normalizeTileRotation(rotation) / (Math.PI / 2)) % 2
+  return q === 1
+}
+
+export function sameTileSurface(a: TileSurface, b: TileSurface): boolean {
+  if (a.type !== b.type) return false
+  if (a.type === 'floor') return true
+  if (a.type === 'wall' && b.type === 'wall') {
+    return a.wallId === b.wallId && a.side === b.side
+  }
+  if (a.type === 'box' && b.type === 'box') {
+    return a.boxId === b.boxId && a.face === b.face
+  }
+  return false
+}
+
+export function normalizePlacedTile(
+  raw: Partial<PlacedTile> & { id?: Id },
+): PlacedTile {
+  const surface: TileSurface =
+    raw.surface?.type === 'wall'
+      ? { type: 'wall', wallId: raw.surface.wallId, side: raw.surface.side }
+      : raw.surface?.type === 'box'
+        ? { type: 'box', boxId: raw.surface.boxId, face: raw.surface.face }
+        : { type: 'floor' }
+  return {
+    id: raw.id ?? createId('tile'),
+    name: (raw.name ?? 'Плитка').trim() || 'Плитка',
+    width: Math.max(0.05, Number(raw.width) || 0.3),
+    length: Math.max(0.05, Number(raw.length) || 0.3),
+    thickness: Math.max(0.002, Math.min(0.08, Number(raw.thickness) || DEFAULT_TILE_THICKNESS)),
+    material: raw.material ?? defaultMaterialRef('Tiles141', 0.3),
+    surface,
+    u: Number(raw.u) || 0,
+    v: Number(raw.v) || 0,
+    rotation: normalizeTileRotation(Number(raw.rotation) || 0),
+    groutM: Math.max(0, Math.min(0.04, Number(raw.groutM) || DEFAULT_TILE_GROUT_M)),
+    clip:
+      Array.isArray(raw.clip) && raw.clip.length >= 3
+        ? raw.clip.map((p) => ({ x: Number(p.x) || 0, y: Number(p.y) || 0 }))
+        : undefined,
+    texRegion: raw.texRegion ? normalizeTileTexRegion(raw.texRegion) : undefined,
+  }
+}
+
+export function tileSurfaceLabel(surface: TileSurface): string {
+  switch (surface.type) {
+    case 'floor':
+      return 'Пол'
+    case 'wall':
+      return 'Стена'
+    case 'box':
+      return 'Короб'
+  }
+}
+
 export type Tool =
   | 'select'
   | 'wall'
@@ -659,6 +861,11 @@ export type Tool =
   | 'window'
   | 'stair'
   | 'floor'
+  | 'box'
+  | 'cutout'
+  | 'placeTile'
+  | 'fillTile'
+  | 'cutTile'
   | 'placeObject'
   | 'lockLength'
   | 'lockPoint'
@@ -688,6 +895,7 @@ export type SceneMode = 'interior' | 'exterior' | 'visit' | 'paint'
  * - plumbing: pipes in walls / slab
  * - electrical: cables, outlets, switches, panels
  * - landscape: site sculpt, ground paint, plants, grass
+ * - tiling: lay ceramic tiles on floors, walls, and boxes
  */
 export type Workbench =
   | 'draft'
@@ -696,6 +904,7 @@ export type Workbench =
   | 'plumbing'
   | 'electrical'
   | 'landscape'
+  | 'tiling'
 
 export const DRAFT_TOOLS: readonly Tool[] = [
   'select',
@@ -705,6 +914,8 @@ export const DRAFT_TOOLS: readonly Tool[] = [
   'window',
   'stair',
   'floor',
+  'box',
+  'cutout',
   'lockLength',
   'lockPoint',
   'horizontal',
@@ -738,6 +949,13 @@ export const LANDSCAPE_TOOLS: readonly Tool[] = [
   'paintGrass',
 ]
 
+export const TILING_TOOLS: readonly Tool[] = [
+  'select',
+  'placeTile',
+  'fillTile',
+  'cutTile',
+]
+
 export function toolsForWorkbench(workbench: Workbench): readonly Tool[] {
   switch (workbench) {
     case 'draft':
@@ -752,6 +970,8 @@ export function toolsForWorkbench(workbench: Workbench): readonly Tool[] {
       return ELECTRICAL_TOOLS
     case 'landscape':
       return LANDSCAPE_TOOLS
+    case 'tiling':
+      return TILING_TOOLS
   }
 }
 
@@ -800,6 +1020,14 @@ export function isMepFixtureTool(tool: Tool): boolean {
 
 export function isMepWorkbench(workbench: Workbench): boolean {
   return workbench === 'plumbing' || workbench === 'electrical'
+}
+
+export function isTilingTool(tool: Tool): boolean {
+  return tool === 'placeTile' || tool === 'fillTile' || tool === 'cutTile'
+}
+
+export function isTilingWorkbench(workbench: Workbench): boolean {
+  return workbench === 'tiling'
 }
 
 /** Global / sun lighting for the 3D viewport (not part of building JSON). */
@@ -861,6 +1089,10 @@ export type Selection =
   | { kind: 'opening'; id: Id }
   | { kind: 'slabOpening'; id: Id }
   | { kind: 'floorPlate'; id: Id }
+  | { kind: 'volumeBox'; id: Id }
+  | { kind: 'volumeCutout'; id: Id }
+  | { kind: 'tile'; id: Id }
+  | { kind: 'tiles'; ids: Id[] }
   | { kind: 'object'; id: Id }
   | { kind: 'plant'; id: Id }
   | { kind: 'pipeSegment'; id: Id }
@@ -887,6 +1119,14 @@ export function isStairTool(tool: Tool): boolean {
 
 export function isFloorPlateTool(tool: Tool): boolean {
   return tool === 'floor'
+}
+
+export function isVolumeBoxTool(tool: Tool): boolean {
+  return tool === 'box'
+}
+
+export function isVolumeCutoutTool(tool: Tool): boolean {
+  return tool === 'cutout'
 }
 
 export function openingKindLabel(kind: OpeningKind): string {
@@ -946,6 +1186,39 @@ export function isSlabOpeningSelected(selection: Selection, id: Id): boolean {
 
 export function isFloorPlateSelected(selection: Selection, id: Id): boolean {
   return selection?.kind === 'floorPlate' && selection.id === id
+}
+
+export function isVolumeBoxSelected(selection: Selection, id: Id): boolean {
+  return selection?.kind === 'volumeBox' && selection.id === id
+}
+
+export function isVolumeCutoutSelected(selection: Selection, id: Id): boolean {
+  return selection?.kind === 'volumeCutout' && selection.id === id
+}
+
+export function isTileSelected(selection: Selection, id: Id): boolean {
+  if (!selection) return false
+  if (selection.kind === 'tile') return selection.id === id
+  if (selection.kind === 'tiles') return selection.ids.includes(id)
+  return false
+}
+
+export function selectedTileIds(selection: Selection): Id[] {
+  if (!selection) return []
+  if (selection.kind === 'tile') return [selection.id]
+  if (selection.kind === 'tiles') return selection.ids
+  return []
+}
+
+export function selectedTileId(selection: Selection): Id | null {
+  return selectedTileIds(selection)[0] ?? null
+}
+
+export function tileSelectionOf(ids: Id[]): Selection {
+  const unique = [...new Set(ids)]
+  if (unique.length === 0) return null
+  if (unique.length === 1) return { kind: 'tile', id: unique[0]! }
+  return { kind: 'tiles', ids: unique }
 }
 
 export function selectedOpeningId(selection: Selection): Id | null {
@@ -1012,6 +1285,9 @@ export function createEmptyFloor(
     openings: [],
     slabOpenings: [],
     plates: [],
+    boxes: [],
+    boxCutouts: [],
+    tiles: [],
     objects: [],
     pipes: emptyPipeNetwork(),
     cables: emptyCableNetwork(),
@@ -1254,6 +1530,9 @@ export function ensureFloorOpenings(floor: Floor): Floor {
     openings: wallOpenings,
     slabOpenings: migratedSlabs,
     plates: floor.plates ?? [],
+    boxes: floor.boxes ?? [],
+    boxCutouts: floor.boxCutouts ?? [],
+    tiles: (floor.tiles ?? []).map((t) => normalizePlacedTile(t)),
     objects: (floor.objects ?? []).map((o) =>
       normalizePlacedObject(o as PlacedObject & { scale?: number }),
     ),

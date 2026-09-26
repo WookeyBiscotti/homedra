@@ -372,6 +372,8 @@ export function floorMeshDeps(floor: Floor): readonly unknown[] {
     floor.openings,
     floor.slabOpenings,
     floor.plates,
+    floor.boxes,
+    floor.boxCutouts,
   ]
 }
 
@@ -395,7 +397,9 @@ export function sameBuildingPicks(a: Building, b: Building): boolean {
       fa.vertices !== fb.vertices ||
       fa.walls !== fb.walls ||
       fa.openings !== fb.openings ||
-      fa.slabOpenings !== fb.slabOpenings
+      fa.slabOpenings !== fb.slabOpenings ||
+      fa.boxes !== fb.boxes ||
+      fa.boxCutouts !== fb.boxCutouts
     ) {
       return false
     }
@@ -452,6 +456,16 @@ export function buildingBounds(building: Building): {
       maxX = Math.max(maxX, p.x + hw)
       minZ = Math.min(minZ, p.y - hd)
       maxZ = Math.max(maxZ, p.y + hd)
+    }
+    for (const b of floor.boxes ?? []) {
+      const hw = b.width / 2
+      const hd = b.depth / 2
+      minX = Math.min(minX, b.x - hw)
+      maxX = Math.max(maxX, b.x + hw)
+      minZ = Math.min(minZ, b.y - hd)
+      maxZ = Math.max(maxZ, b.y + hd)
+      minY = Math.min(minY, floor.elevation + b.elevation)
+      maxY = Math.max(maxY, floor.elevation + b.elevation + b.height)
     }
   }
 

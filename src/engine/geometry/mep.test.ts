@@ -255,6 +255,7 @@ describe('mep', () => {
       passages: false,
       stairs: false,
       plates: false,
+      boxes: false,
       pipes: true,
       cables: false,
     })

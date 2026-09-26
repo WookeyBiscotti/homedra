@@ -16,7 +16,7 @@ import {
   wallsShareAxis,
   type WallFace,
 } from '../engine/geometry/wallSolid'
-import { selectedVertexIds, selectedWallIds, openingKindLabel, slabOpeningKindLabel, isGroundFloor, isStoryFloor, wallLength, PIPE_MEDIUM_META, electricalDeviceLabel, electricalDeviceSize, ensureCableNetwork, ensurePipeNetwork, pipeFixtureLabel, pipeMediumLabel, type PipeMedium, type WallSide } from '../engine/types'
+import { selectedVertexIds, selectedWallIds, selectedTileIds, openingKindLabel, slabOpeningKindLabel, isGroundFloor, isStoryFloor, wallLength, PIPE_MEDIUM_META, electricalDeviceLabel, electricalDeviceSize, ensureCableNetwork, ensurePipeNetwork, pipeFixtureLabel, pipeMediumLabel, tileSurfaceLabel, defaultTileSpec, defaultTileTexRegion, type PipeMedium, type WallSide } from '../engine/types'
 import { segmentEmbed, segmentLength } from '../engine/geometry/mep'
 import { useBuildingStore } from '../store/buildingStore'
 import { resolvePlantShape } from '../landscape/plantShape'
@@ -26,6 +26,8 @@ import { grassLayers } from '../landscape/grassLayers'
 import { ConstraintsList } from './ConstraintsList'
 import { CopyFloorOptionsForm } from './CopyFloorOptionsForm'
 import { MaterialSlot } from './TextureBrowser'
+import { TextureRegionPicker } from './TextureRegionPicker'
+import { TileThumb } from './TileThumb'
 import { ObjectTextureEditor } from './ObjectTextureEditor'
 import {
   detectRooms,
@@ -66,6 +68,10 @@ export function PropertiesPanel() {
   const setSlabOpeningMaterial = useBuildingStore((s) => s.setSlabOpeningMaterial)
   const updateFloorPlate = useBuildingStore((s) => s.updateFloorPlate)
   const setFloorPlateMaterial = useBuildingStore((s) => s.setFloorPlateMaterial)
+  const updateVolumeBox = useBuildingStore((s) => s.updateVolumeBox)
+  const setVolumeBoxMaterial = useBuildingStore((s) => s.setVolumeBoxMaterial)
+  const updateVolumeCutout = useBuildingStore((s) => s.updateVolumeCutout)
+  const setVolumeCutoutMaterial = useBuildingStore((s) => s.setVolumeCutoutMaterial)
   const updatePlacedObject = useBuildingStore((s) => s.updatePlacedObject)
   const copySelectedObject = useBuildingStore((s) => s.copySelectedObject)
   const updatePipeSegment = useBuildingStore((s) => s.updatePipeSegment)
@@ -86,6 +92,7 @@ export function PropertiesPanel() {
   const isPlumbing = workbench === 'plumbing'
   const isElectrical = workbench === 'electrical'
   const isLandscape = workbench === 'landscape'
+  const isTiling = workbench === 'tiling'
 
   const stories = building.floors.filter(isStoryFloor)
   const ground = building.floors.find(isGroundFloor)
@@ -116,6 +123,20 @@ export function PropertiesPanel() {
     selection?.kind === 'floorPlate'
       ? (floor.plates ?? []).find((p) => p.id === selection.id)
       : null
+  const volumeBox =
+    selection?.kind === 'volumeBox'
+      ? (floor.boxes ?? []).find((b) => b.id === selection.id)
+      : null
+  const volumeCutout =
+    selection?.kind === 'volumeCutout'
+      ? (floor.boxCutouts ?? []).find((c) => c.id === selection.id)
+      : null
+  const tileIds = selectedTileIds(selection)
+  const placedTile = tileIds[0]
+    ? (floor.tiles ?? []).find((t) => t.id === tileIds[0]) ?? null
+    : null
+  const updateTile = useBuildingStore((s) => s.updateTile)
+  const resetTileClip = useBuildingStore((s) => s.resetTileClip)
   const placedObject =
     selection?.kind === 'object'
       ? (floor.objects ?? []).find((o) => o.id === selection.id)
@@ -271,7 +292,9 @@ export function PropertiesPanel() {
           ? 'Текстуры'
           : isFurnish
             ? 'Объект'
-            : isPlumbing
+            : isTiling
+              ? 'Плитка'
+              : isPlumbing
               ? 'Трубы'
               : isElectrical
                 ? 'Электрика'
@@ -779,7 +802,7 @@ export function PropertiesPanel() {
         </p>
       )}
 
-      {((!isGround && (isDraft || isPaint || isFurnish)) ||
+      {((!isGround && (isDraft || isPaint || isFurnish || isTiling)) ||
         (isLandscape && placedObject)) && (
         <>
       {isDraft && slabOpening && (
@@ -921,6 +944,359 @@ export function PropertiesPanel() {
             onChange={(ref) => setFloorPlateMaterial(floorPlate.id, ref)}
             onClear={() => setFloorPlateMaterial(floorPlate.id, null)}
           />
+        </section>
+      )}
+
+      {isDraft && volumeBox && (
+        <section className="prop-section">
+          <h3>Короб</h3>
+          <p className="muted">
+            Объём на плане. Отступ — от пола этажа. Чтобы повесить у потолка:
+            отступ = высота этажа − высота короба.
+          </p>
+          <label>
+            Ширина (X), м
+            <input
+              type="number"
+              min={0.2}
+              max={50}
+              step={0.05}
+              value={volumeBox.width}
+              onChange={(e) =>
+                updateVolumeBox(volumeBox.id, {
+                  width: Number(e.target.value),
+                })
+              }
+            />
+          </label>
+          <label>
+            Глубина (Y), м
+            <input
+              type="number"
+              min={0.2}
+              max={50}
+              step={0.05}
+              value={volumeBox.depth}
+              onChange={(e) =>
+                updateVolumeBox(volumeBox.id, {
+                  depth: Number(e.target.value),
+                })
+              }
+            />
+          </label>
+          <label>
+            Высота, м
+            <input
+              type="number"
+              min={0.05}
+              max={8}
+              step={0.05}
+              value={volumeBox.height}
+              onChange={(e) =>
+                updateVolumeBox(volumeBox.id, {
+                  height: Number(e.target.value),
+                })
+              }
+            />
+          </label>
+          <label>
+            Отступ от пола, м
+            <input
+              type="number"
+              min={0}
+              max={8}
+              step={0.05}
+              value={volumeBox.elevation}
+              onChange={(e) =>
+                updateVolumeBox(volumeBox.id, {
+                  elevation: Number(e.target.value),
+                })
+              }
+            />
+          </label>
+          <label>
+            Центр X, м
+            <input
+              type="number"
+              step={0.05}
+              value={volumeBox.x}
+              onChange={(e) =>
+                updateVolumeBox(volumeBox.id, { x: Number(e.target.value) })
+              }
+            />
+          </label>
+          <label>
+            Центр Y, м
+            <input
+              type="number"
+              step={0.05}
+              value={volumeBox.y}
+              onChange={(e) =>
+                updateVolumeBox(volumeBox.id, { y: Number(e.target.value) })
+              }
+            />
+          </label>
+          <MaterialSlot
+            label="Текстура короба"
+            value={volumeBox.material}
+            onChange={(ref) => setVolumeBoxMaterial(volumeBox.id, ref)}
+            onClear={() => setVolumeBoxMaterial(volumeBox.id, null)}
+          />
+        </section>
+      )}
+
+      {isPaint && volumeBox && (
+        <section className="prop-section">
+          <h3>Короб</h3>
+          <MaterialSlot
+            label="Текстура короба"
+            value={volumeBox.material}
+            onChange={(ref) => setVolumeBoxMaterial(volumeBox.id, ref)}
+            onClear={() => setVolumeBoxMaterial(volumeBox.id, null)}
+          />
+        </section>
+      )}
+
+      {isDraft && volumeCutout && (
+        <section className="prop-section">
+          <h3>Вырез в коробе</h3>
+          <p className="muted">
+            Прямоугольный вырез. По умолчанию на всю высоту короба; уменьшите
+            высоту или сдвиньте отступ, чтобы получить нишу.
+          </p>
+          <label>
+            Ширина (X), м
+            <input
+              type="number"
+              min={0.1}
+              max={50}
+              step={0.05}
+              value={volumeCutout.width}
+              onChange={(e) =>
+                updateVolumeCutout(volumeCutout.id, {
+                  width: Number(e.target.value),
+                })
+              }
+            />
+          </label>
+          <label>
+            Глубина (Y), м
+            <input
+              type="number"
+              min={0.1}
+              max={50}
+              step={0.05}
+              value={volumeCutout.depth}
+              onChange={(e) =>
+                updateVolumeCutout(volumeCutout.id, {
+                  depth: Number(e.target.value),
+                })
+              }
+            />
+          </label>
+          <label>
+            Высота, м
+            <input
+              type="number"
+              min={0.05}
+              max={8}
+              step={0.05}
+              value={volumeCutout.height}
+              onChange={(e) =>
+                updateVolumeCutout(volumeCutout.id, {
+                  height: Number(e.target.value),
+                })
+              }
+            />
+          </label>
+          <label>
+            Отступ от пола, м
+            <input
+              type="number"
+              min={0}
+              max={8}
+              step={0.05}
+              value={volumeCutout.elevation}
+              onChange={(e) =>
+                updateVolumeCutout(volumeCutout.id, {
+                  elevation: Number(e.target.value),
+                })
+              }
+            />
+          </label>
+          <label>
+            Центр X, м
+            <input
+              type="number"
+              step={0.05}
+              value={volumeCutout.x}
+              onChange={(e) =>
+                updateVolumeCutout(volumeCutout.id, {
+                  x: Number(e.target.value),
+                })
+              }
+            />
+          </label>
+          <label>
+            Центр Y, м
+            <input
+              type="number"
+              step={0.05}
+              value={volumeCutout.y}
+              onChange={(e) =>
+                updateVolumeCutout(volumeCutout.id, {
+                  y: Number(e.target.value),
+                })
+              }
+            />
+          </label>
+          <MaterialSlot
+            label="Текстура выреза"
+            value={volumeCutout.material}
+            onChange={(ref) => setVolumeCutoutMaterial(volumeCutout.id, ref)}
+            onClear={() => setVolumeCutoutMaterial(volumeCutout.id, null)}
+          />
+        </section>
+      )}
+
+      {isPaint && volumeCutout && (
+        <section className="prop-section">
+          <h3>Вырез в коробе</h3>
+          <MaterialSlot
+            label="Срезы выреза"
+            value={volumeCutout.material}
+            onChange={(ref) => setVolumeCutoutMaterial(volumeCutout.id, ref)}
+            onClear={() => setVolumeCutoutMaterial(volumeCutout.id, null)}
+          />
+        </section>
+      )}
+
+      {isTiling && placedTile && (
+        <section className="prop-section">
+          <h3>Плитка</h3>
+          <div className="tile-face-preview" aria-label="Внешний вид плитки">
+            <TileThumb
+              material={placedTile.material}
+              alt={placedTile.name}
+              width={placedTile.width}
+              length={placedTile.length}
+              texRegion={placedTile.texRegion}
+            />
+          </div>
+          <p className="muted">{tileSurfaceLabel(placedTile.surface)}</p>
+          {tileIds.length > 1 && (
+            <p className="muted">Выбрано плиток: {tileIds.length}. Shift+клик или рамка — несколько.</p>
+          )}
+          {tileIds.length === 1 && (
+            <p className="muted">Shift+клик или рамка — несколько. Перетаскивание — вдоль грани.</p>
+          )}
+          <label>
+            Название
+            <input
+              type="text"
+              value={placedTile.name}
+              onChange={(e) => updateTile(placedTile.id, { name: e.target.value })}
+            />
+          </label>
+          <label>
+            Ширина, м
+            <input
+              type="number"
+              min={0.05}
+              max={2}
+              step={0.01}
+              value={placedTile.width}
+              onChange={(e) =>
+                updateTile(placedTile.id, { width: Number(e.target.value) })
+              }
+            />
+          </label>
+          <label>
+            Длина, м
+            <input
+              type="number"
+              min={0.05}
+              max={2}
+              step={0.01}
+              value={placedTile.length}
+              onChange={(e) =>
+                updateTile(placedTile.id, { length: Number(e.target.value) })
+              }
+            />
+          </label>
+          <label>
+            Толщина, мм
+            <input
+              type="number"
+              min={2}
+              max={40}
+              step={1}
+              value={Math.round(placedTile.thickness * 1000)}
+              onChange={(e) =>
+                updateTile(placedTile.id, {
+                  thickness: Number(e.target.value) / 1000,
+                })
+              }
+            />
+          </label>
+          <label>
+            Поворот, °
+            <input
+              type="number"
+              step={90}
+              value={Math.round((placedTile.rotation * 180) / Math.PI)}
+              onChange={(e) =>
+                updateTile(placedTile.id, {
+                  rotation: (Number(e.target.value) * Math.PI) / 180,
+                })
+              }
+            />
+          </label>
+          <label>
+            Шов, мм
+            <input
+              type="number"
+              min={0}
+              max={20}
+              step={0.5}
+              value={Math.round(placedTile.groutM * 1000 * 10) / 10}
+              onChange={(e) =>
+                updateTile(placedTile.id, {
+                  groutM: Number(e.target.value) / 1000,
+                })
+              }
+            />
+          </label>
+          <MaterialSlot
+            label="Рисунок"
+            value={placedTile.material}
+            onChange={(ref) =>
+              updateTile(placedTile.id, {
+                material: ref,
+                texRegion: defaultTileTexRegion(),
+              })
+            }
+            onClear={() =>
+              updateTile(placedTile.id, {
+                material: defaultTileSpec().material,
+                texRegion: defaultTileTexRegion(),
+              })
+            }
+          />
+          <TextureRegionPicker
+            material={placedTile.material}
+            value={placedTile.texRegion}
+            onChange={(texRegion) => updateTile(placedTile.id, { texRegion })}
+          />
+          {placedTile.clip && (
+            <button
+              type="button"
+              className="prop-action"
+              onClick={() => resetTileClip(placedTile.id)}
+            >
+              Сбросить подрезку
+            </button>
+          )}
         </section>
       )}
 
@@ -1672,14 +2048,17 @@ export function PropertiesPanel() {
         !opening &&
         !slabOpening &&
         !floorPlate &&
+        !volumeBox &&
+        !volumeCutout &&
         !placedObject &&
         !distancePair &&
         !pointsAlign &&
         !vertexDistancePair &&
         !pointOnWallPair && (
         <p className="muted">
-          Выберите стену, вершину, проём, объект или пол. Инструмент «Пол» (B) —
-          плита без стен. Shift+клик — несколько.
+          Выберите стену, вершину, проём, короб, вырез, объект или пол.
+          Инструмент «Короб» (K) — объём, «Вырез» (C) — отверстие в коробе.
+          Shift+клик — несколько.
         </p>
       )}
         </>

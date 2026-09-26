@@ -13,6 +13,9 @@ import {
   type OpeningKind,
   type SlabOpening,
   type Vertex,
+  type PlacedTile,
+  type VolumeBox,
+  type VolumeCutout,
   type Wall,
 } from './types'
 
@@ -24,8 +27,10 @@ export interface CopyFloorOptions {
   passages: boolean
   stairs: boolean
   plates: boolean
+  boxes: boolean
   pipes: boolean
   cables: boolean
+  tiles: boolean
 }
 
 export const DEFAULT_COPY_FLOOR_OPTIONS: CopyFloorOptions = {
@@ -36,8 +41,10 @@ export const DEFAULT_COPY_FLOOR_OPTIONS: CopyFloorOptions = {
   passages: true,
   stairs: true,
   plates: true,
+  boxes: true,
   pipes: true,
   cables: true,
+  tiles: true,
 }
 
 function openingKindSelected(
@@ -154,11 +161,68 @@ export function applyFloorCopy(
       }))
     : []
 
+  const boxIdMap = new Map<string, string>()
+  const boxes: VolumeBox[] = options.boxes
+    ? (source.boxes ?? []).map((b) => {
+        const id = createId('box')
+        boxIdMap.set(b.id, id)
+        return { ...b, id }
+      })
+    : []
+  const boxCutouts: VolumeCutout[] = options.boxes
+    ? (source.boxCutouts ?? [])
+        .map((c) => {
+          const boxId = boxIdMap.get(c.boxId)
+          if (!boxId) return null
+          return { ...c, id: createId('cut'), boxId }
+        })
+        .filter((c): c is VolumeCutout => c !== null)
+    : []
+
+  const remapTiles = (wallMap: Map<string, string> | null): PlacedTile[] => {
+    if (!options.tiles) return target.tiles ?? []
+    return (source.tiles ?? [])
+      .map((t) => {
+        if (t.surface.type === 'wall') {
+          const wallId = wallMap?.get(t.surface.wallId)
+          if (!wallId) return null
+          return {
+            ...t,
+            id: createId('tile'),
+            material: { ...t.material },
+            surface: { ...t.surface, wallId },
+            clip: t.clip?.map((p) => ({ ...p })),
+          }
+        }
+        if (t.surface.type === 'box') {
+          const boxId = boxIdMap.get(t.surface.boxId)
+          if (!boxId) return null
+          return {
+            ...t,
+            id: createId('tile'),
+            material: { ...t.material },
+            surface: { ...t.surface, boxId },
+            clip: t.clip?.map((p) => ({ ...p })),
+          }
+        }
+        return {
+          ...t,
+          id: createId('tile'),
+          material: { ...t.material },
+          clip: t.clip?.map((p) => ({ ...p })),
+        }
+      })
+      .filter((t): t is PlacedTile => t !== null)
+  }
+
   if (!copyWalls) {
     return {
       ...target,
       slabOpenings: options.stairs ? slabOpenings : (target.slabOpenings ?? []),
       plates: options.plates ? plates : (target.plates ?? []),
+      boxes: options.boxes ? boxes : (target.boxes ?? []),
+      boxCutouts: options.boxes ? boxCutouts : (target.boxCutouts ?? []),
+      tiles: remapTiles(null),
       pipes: options.pipes ? copyPipeNetwork(source, null) : (target.pipes ?? emptyPipeNetwork()),
       cables: options.cables
         ? copyCableNetwork(source, null)
@@ -210,6 +274,9 @@ export function applyFloorCopy(
     openings,
     slabOpenings: options.stairs ? slabOpenings : [],
     plates: options.plates ? plates : [],
+    boxes: options.boxes ? boxes : [],
+    boxCutouts: options.boxes ? boxCutouts : [],
+    tiles: remapTiles(wallMap),
     pipes: options.pipes
       ? copyPipeNetwork(source, wallMap)
       : (target.pipes ?? emptyPipeNetwork()),

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { applyFloorCopy, DEFAULT_COPY_FLOOR_OPTIONS } from './copyFloor'
-import { createEmptyFloor, createId, type Floor } from './types'
+import {
+  createEmptyFloor,
+  createId,
+  defaultMaterialRef,
+  type Floor,
+} from './types'
 
 function sampleFloor(): Floor {
   const v1 = { id: createId('v'), x: 0, y: 0 }
@@ -56,6 +61,7 @@ describe('applyFloorCopy', () => {
       ...DEFAULT_COPY_FLOOR_OPTIONS,
       stairs: false,
       plates: false,
+      boxes: false,
       pipes: false,
       cables: false,
     })
@@ -97,6 +103,7 @@ describe('applyFloorCopy', () => {
       passages: false,
       stairs: false,
       plates: false,
+      boxes: false,
       pipes: false,
       cables: false,
     })
@@ -117,6 +124,7 @@ describe('applyFloorCopy', () => {
       passages: false,
       stairs: false,
       plates: false,
+      boxes: false,
       pipes: false,
       cables: false,
     })
@@ -124,5 +132,117 @@ describe('applyFloorCopy', () => {
     expect(result.walls).toHaveLength(2)
     expect(result.openings).toHaveLength(0)
     expect(result.constraints).toHaveLength(0)
+  })
+
+  it('copies boxes and remaps cutout box ids', () => {
+    const source = sampleFloor()
+    source.boxes = [
+      { id: 'box1', x: 1, y: 1, width: 1.2, depth: 0.6, elevation: 0, height: 0.4 },
+    ]
+    source.boxCutouts = [
+      {
+        id: 'cut1',
+        boxId: 'box1',
+        x: 1,
+        y: 1,
+        width: 0.3,
+        depth: 0.3,
+        elevation: 0,
+        height: 0.4,
+      },
+    ]
+    const target = createEmptyFloor('Этаж 2', 2.8, 2.8)
+    const result = applyFloorCopy(target, source, {
+      walls: false,
+      constraints: false,
+      doors: false,
+      windows: false,
+      passages: false,
+      stairs: false,
+      plates: false,
+      boxes: true,
+      pipes: false,
+      cables: false,
+    })
+    expect(result.boxes).toHaveLength(1)
+    expect(result.boxCutouts).toHaveLength(1)
+    expect(result.boxes?.[0]?.id).not.toBe('box1')
+    expect(result.boxCutouts?.[0]?.boxId).toBe(result.boxes?.[0]?.id)
+    expect(result.boxCutouts?.[0]?.id).not.toBe('cut1')
+  })
+
+  it('copies tiles and remaps wall and box surface ids', () => {
+    const source = sampleFloor()
+    const wallId = source.walls[0]!.id
+    source.boxes = [
+      { id: 'box1', x: 1, y: 1, width: 1.2, depth: 0.6, elevation: 0, height: 0.4 },
+    ]
+    source.tiles = [
+      {
+        id: 'tile-floor',
+        name: '30×30',
+        width: 0.3,
+        length: 0.3,
+        thickness: 0.008,
+        material: defaultMaterialRef('Tiles141', 0.3),
+        surface: { type: 'floor' },
+        u: 1,
+        v: 1,
+        rotation: 0,
+        groutM: 0.002,
+      },
+      {
+        id: 'tile-wall',
+        name: '30×30',
+        width: 0.3,
+        length: 0.3,
+        thickness: 0.008,
+        material: defaultMaterialRef('Tiles141', 0.3),
+        surface: { type: 'wall', wallId, side: 'pos' },
+        u: 0.5,
+        v: 0.8,
+        rotation: 0,
+        groutM: 0.002,
+      },
+      {
+        id: 'tile-box',
+        name: '30×30',
+        width: 0.3,
+        length: 0.3,
+        thickness: 0.008,
+        material: defaultMaterialRef('Tiles141', 0.3),
+        surface: { type: 'box', boxId: 'box1', face: 'top' },
+        u: 1,
+        v: 1,
+        rotation: 0,
+        groutM: 0.002,
+      },
+    ]
+    const target = createEmptyFloor('Этаж 2', 2.8, 2.8)
+    const result = applyFloorCopy(target, source, {
+      ...DEFAULT_COPY_FLOOR_OPTIONS,
+      stairs: false,
+      plates: false,
+      pipes: false,
+      cables: false,
+    })
+
+    expect(result.tiles).toHaveLength(3)
+    const floorTile = result.tiles!.find((t) => t.surface.type === 'floor')
+    const wallTile = result.tiles!.find((t) => t.surface.type === 'wall')
+    const boxTile = result.tiles!.find((t) => t.surface.type === 'box')
+    expect(floorTile?.id).not.toBe('tile-floor')
+    expect(wallTile?.id).not.toBe('tile-wall')
+    expect(boxTile?.id).not.toBe('tile-box')
+    expect(wallTile?.surface.type).toBe('wall')
+    if (wallTile?.surface.type === 'wall') {
+      expect(wallTile.surface.wallId).not.toBe(wallId)
+      expect(result.walls.some((w) => w.id === wallTile.surface.wallId)).toBe(true)
+    }
+    expect(boxTile?.surface.type).toBe('box')
+    if (boxTile?.surface.type === 'box') {
+      expect(boxTile.surface.boxId).not.toBe('box1')
+      expect(boxTile.surface.boxId).toBe(result.boxes?.[0]?.id)
+    }
   })
 })

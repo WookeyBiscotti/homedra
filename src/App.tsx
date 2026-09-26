@@ -24,6 +24,8 @@ const keyToTool: Record<string, Tool> = {
   n: 'window',
   s: 'stair',
   b: 'floor',
+  k: 'box',
+  c: 'cutout',
   f: 'placeObject',
   l: 'lockLength',
   p: 'lockPoint',
@@ -169,7 +171,10 @@ export default function App() {
   const cancelOpeningDraft = useBuildingStore((s) => s.cancelOpeningDraft)
   const cancelSlabOpeningDraft = useBuildingStore((s) => s.cancelSlabOpeningDraft)
   const cancelFloorPlateDraft = useBuildingStore((s) => s.cancelFloorPlateDraft)
+  const cancelVolumeBoxDraft = useBuildingStore((s) => s.cancelVolumeBoxDraft)
+  const cancelVolumeCutoutDraft = useBuildingStore((s) => s.cancelVolumeCutoutDraft)
   const cancelMepDraft = useBuildingStore((s) => s.cancelMepDraft)
+  const cancelTileCut = useBuildingStore((s) => s.cancelTileCut)
   const viewMode = useBuildingStore((s) => s.viewMode)
   const setTransformGizmoMode = useBuildingStore((s) => s.setTransformGizmoMode)
   const selection = useBuildingStore((s) => s.selection)
@@ -206,8 +211,12 @@ export default function App() {
         cancelOpeningDraft()
         cancelSlabOpeningDraft()
         cancelFloorPlateDraft()
+        cancelVolumeBoxDraft()
+        cancelVolumeCutoutDraft()
         cancelMepDraft()
+        cancelTileCut()
         useBuildingStore.getState().setPendingModel(null)
+        useBuildingStore.getState().setPendingTile(null)
         setTool('select')
         return
       }
@@ -271,6 +280,25 @@ export default function App() {
         }
         return
       }
+      if (!mod && workbench === 'tiling') {
+        if (key === 'r') {
+          e.preventDefault()
+          useBuildingStore.getState().rotateTileOrPending()
+          return
+        }
+        const tilingKeys: Record<string, Tool> = {
+          v: 'select',
+          t: 'placeTile',
+          f: 'fillTile',
+          c: 'cutTile',
+        }
+        const t = tilingKeys[key]
+        if (t) {
+          e.preventDefault()
+          setTool(t)
+        }
+        return
+      }
       if (!mod && workbench === 'electrical') {
         const electricalKeys: Record<string, Tool> = {
           v: 'select',
@@ -314,7 +342,10 @@ export default function App() {
     cancelOpeningDraft,
     cancelSlabOpeningDraft,
     cancelFloorPlateDraft,
+    cancelVolumeBoxDraft,
+    cancelVolumeCutoutDraft,
     cancelMepDraft,
+    cancelTileCut,
     setTransformGizmoMode,
     selection,
   ])

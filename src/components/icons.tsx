@@ -11,7 +11,12 @@ export const TOOL_ICONS: Partial<Record<Tool, string>> = {
   window: publicUrl('icons/tools/window.svg'),
   stair: publicUrl('icons/tools/stair.svg'),
   floor: publicUrl('icons/tools/floor.svg'),
+  box: publicUrl('icons/tools/box.svg'),
+  cutout: publicUrl('icons/tools/cutout.svg'),
   placeObject: publicUrl('icons/tools/place-object.svg'),
+  placeTile: publicUrl('icons/tools/place-tile.svg'),
+  fillTile: publicUrl('icons/tools/fill-tile.svg'),
+  cutTile: publicUrl('icons/tools/cut-tile.svg'),
   pipe: publicUrl('icons/tools/pipe.svg'),
   pipeValve: publicUrl('icons/tools/pipe-valve.svg'),
   pipeHeater: publicUrl('icons/tools/pipe-heater.svg'),
@@ -48,6 +53,7 @@ export const UI_ICONS = {
     plumbing: publicUrl('icons/ui/workbench-plumbing.svg'),
     electrical: publicUrl('icons/ui/workbench-electrical.svg'),
     landscape: publicUrl('icons/ui/workbench-landscape.svg'),
+    tiling: publicUrl('icons/ui/workbench-tiling.svg'),
   } satisfies Record<Workbench, string>,
 } as const
 

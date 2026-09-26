@@ -828,6 +828,7 @@ body.panel-resizing * {
 }
 
 .furnish-item-card img,
+.furnish-item-card .tile-thumb,
 .furnish-item-card .model-thumb-fallback {
   width: 52px;
   height: 52px;
@@ -869,6 +870,134 @@ body.panel-resizing * {
   padding: 0.2rem 0.4rem;
 }
 
+.tile-grout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  margin: 0.35rem 0;
+}
+
+.tile-grout input {
+  width: 4.5rem;
+}
+
+.tile-editor {
+  margin: 0.5rem 0;
+  padding: 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.tile-editor h3 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.tile-face-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 96px;
+  padding: 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--bg-deep) 70%, #fff);
+}
+
+.tile-face-preview img,
+.tile-face-preview .tile-thumb,
+.tile-face-preview .model-thumb-fallback {
+  max-width: 160px;
+  max-height: 120px;
+  width: auto;
+  height: 118px;
+  object-fit: cover;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+  background: var(--bg-deep);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+
+.tile-thumb {
+  position: relative;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: var(--bg-deep);
+}
+
+.tile-thumb img {
+  position: absolute;
+  max-width: none;
+  object-fit: fill;
+}
+
+.tile-tex-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.25rem;
+}
+
+.tile-tex-picker-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.82rem;
+}
+
+.tile-tex-picker-box {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-deep);
+  touch-action: none;
+  user-select: none;
+}
+
+.tile-tex-picker-box img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  pointer-events: none;
+}
+
+.tile-tex-region {
+  position: absolute;
+  border: 2px solid #c45c26;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35);
+  cursor: move;
+}
+
+.tile-tex-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  padding: 0;
+  border: 1px solid #fff;
+  background: #c45c26;
+  border-radius: 1px;
+}
+
+.tile-tex-handle-nw,
+.tile-tex-handle-se {
+  cursor: nwse-resize;
+}
+
+.tile-tex-handle-ne,
+.tile-tex-handle-sw {
+  cursor: nesw-resize;
+}
+
 .furnish-empty {
   font-size: 0.78rem;
   margin: 0.5rem 0;
@@ -876,6 +1005,32 @@ body.panel-resizing * {
 
 .furnish-catalog-btn {
   margin: 0.35rem 0;
+}
+
+.tile-pending-preview {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.4rem 0;
+}
+
+.tile-pending-preview img,
+.tile-pending-preview .tile-thumb,
+.tile-pending-preview .model-thumb-fallback {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: var(--bg-deep);
+  flex-shrink: 0;
+}
+
+.tile-pending-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
 }
 
 .paint-brush-preview {
@@ -2643,7 +2798,8 @@ button.ghost.small {
   .workspace-furnish,
   .workspace-plumbing,
   .workspace-electrical,
-  .workspace-landscape {
+  .workspace-landscape,
+  .workspace-tiling {
     grid-template-columns: 1fr;
     grid-template-rows: auto 1fr auto;
   }

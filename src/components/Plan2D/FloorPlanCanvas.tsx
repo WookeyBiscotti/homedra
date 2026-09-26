@@ -29,14 +29,29 @@ import {
   floorPlateRect,
 } from '../../engine/geometry/floorPlates'
 import {
+  createVolumeBoxFromDrag,
+  createVolumeCutoutFromDrag,
+  volumeBoxRect,
+  volumeCutoutRect,
+} from '../../engine/geometry/volumeBoxes'
+import {
   allJoinedWallFootprints,
   wallFootprint,
   joinedWallFootprint,
 } from '../../engine/geometry/wallSolid'
 import { planHalfSizeOf } from '../../engine/geometry/objectSnap'
+import { hitFloorTile, tileLocalPolygon, tileLocalRect } from '../../engine/geometry/tiles'
+import { useMaterialHtmlImage } from '../TileThumb'
+import { fillTilesOnSurface, layoutTile } from '../../engine/geometry/tileFill'
 import {
   isFloorPlateSelected,
   isFloorPlateTool,
+  isTileSelected,
+  selectedTileIds,
+  isVolumeBoxSelected,
+  isVolumeBoxTool,
+  isVolumeCutoutSelected,
+  isVolumeCutoutTool,
   isMepDrawTool,
   isMepFixtureTool,
   isObjectSelected,
@@ -47,8 +62,10 @@ import {
   isWallOpeningTool,
   isWallSelected,
   selectedVertexIds,
+  normalizeTileTexRegion,
   type Floor,
   type Opening,
+  type PlacedTile,
   type Wall,
   wallLength,
 } from '../../engine/types'
@@ -78,7 +95,12 @@ function contentCenter(
 ): { cx: number; cy: number } {
   const verts = [...floor.vertices, ...(lower?.vertices ?? [])]
   const platePts: Array<{ x: number; y: number }> = []
-  for (const p of [...(floor.plates ?? []), ...(lower?.plates ?? [])]) {
+  for (const p of [
+    ...(floor.plates ?? []),
+    ...(lower?.plates ?? []),
+    ...(floor.boxes ?? []),
+    ...(lower?.boxes ?? []),
+  ]) {
     const hw = p.width / 2
     const hd = p.depth / 2
     platePts.push(
@@ -106,6 +128,83 @@ function worldRingToScreen(
     screenPts.push(s.x, s.y)
   }
   return screenPts
+}
+
+function tilePatternProps(
+  tile: PlacedTile,
+  toScreen: (x: number, y: number) => { x: number; y: number },
+  image: HTMLImageElement | null,
+) {
+  if (!image || image.width < 1 || image.height < 1) return {}
+  const r = tileLocalRect(tile)
+  const a = toScreen(r.minU, r.maxV)
+  const b = toScreen(r.maxU, r.minV)
+  const w = Math.abs(b.x - a.x)
+  const h = Math.abs(b.y - a.y)
+  if (w < 1 || h < 1) return {}
+  const region = normalizeTileTexRegion(tile.texRegion)
+  const du = Math.max(0.04, region.u1 - region.u0)
+  const dv = Math.max(0.04, region.v1 - region.v0)
+  const scaleX = w / (image.width * du)
+  const scaleY = h / (image.height * dv)
+  const originX = Math.min(a.x, b.x)
+  const originY = Math.min(a.y, b.y)
+  return {
+    fill: '#ffffff',
+    fillPriority: 'pattern' as const,
+    fillPatternImage: image,
+    fillPatternX: originX - region.u0 * image.width * scaleX,
+    fillPatternY: originY - region.v0 * image.height * scaleY,
+    fillPatternScaleX: scaleX,
+    fillPatternScaleY: scaleY,
+  }
+}
+
+function FloorTileShape({
+  tile,
+  toScreen,
+  selected,
+  ghost,
+  listening,
+  ...handlers
+}: {
+  tile: PlacedTile
+  toScreen: (x: number, y: number) => { x: number; y: number }
+  selected?: boolean
+  ghost?: boolean
+  listening?: boolean
+  onMouseEnter?: (e: Konva.KonvaEventObject<MouseEvent>) => void
+  onMouseLeave?: (e: Konva.KonvaEventObject<MouseEvent>) => void
+  onMouseDown?: (e: Konva.KonvaEventObject<MouseEvent>) => void
+  onClick?: (e: Konva.KonvaEventObject<MouseEvent>) => void
+}) {
+  const image = useMaterialHtmlImage(tile.material)
+  const pts = worldRingToScreen(tileLocalPolygon(tile), toScreen)
+  const pattern = tilePatternProps(tile, toScreen, image)
+  return (
+    <Line
+      points={pts}
+      closed
+      listening={listening}
+      fill={
+        image
+          ? undefined
+          : ghost
+            ? 'rgba(90, 90, 90, 0.28)'
+            : selected
+              ? 'rgba(196, 92, 38, 0.35)'
+              : 'rgba(180, 140, 90, 0.28)'
+      }
+      {...pattern}
+      opacity={ghost ? 0.82 : 1}
+      stroke={
+        ghost ? '#5a5a5a' : selected ? '#c45c26' : '#8a6a45'
+      }
+      strokeWidth={ghost ? 1.5 : selected ? 3 : 1}
+      dash={ghost ? [5, 4] : undefined}
+      {...handlers}
+    />
+  )
 }
 
 function openingSymbolLines(
@@ -206,6 +305,8 @@ export function FloorPlanCanvas() {
   const openingDraft = useBuildingStore((s) => s.openingDraft)
   const slabOpeningDraft = useBuildingStore((s) => s.slabOpeningDraft)
   const floorPlateDraft = useBuildingStore((s) => s.floorPlateDraft)
+  const boxDraft = useBuildingStore((s) => s.boxDraft)
+  const cutoutDraft = useBuildingStore((s) => s.cutoutDraft)
   const conflict = useBuildingStore((s) => s.conflict)
   const beginWall = useBuildingStore((s) => s.beginWall)
   const finishWall = useBuildingStore((s) => s.finishWall)
@@ -221,7 +322,26 @@ export function FloorPlanCanvas() {
   const updateFloorPlateDraft = useBuildingStore((s) => s.updateFloorPlateDraft)
   const finishFloorPlate = useBuildingStore((s) => s.finishFloorPlate)
   const dragFloorPlate = useBuildingStore((s) => s.dragFloorPlate)
+  const beginVolumeBox = useBuildingStore((s) => s.beginVolumeBox)
+  const updateVolumeBoxDraft = useBuildingStore((s) => s.updateVolumeBoxDraft)
+  const finishVolumeBox = useBuildingStore((s) => s.finishVolumeBox)
+  const dragVolumeBox = useBuildingStore((s) => s.dragVolumeBox)
+  const beginVolumeCutout = useBuildingStore((s) => s.beginVolumeCutout)
+  const updateVolumeCutoutDraft = useBuildingStore((s) => s.updateVolumeCutoutDraft)
+  const finishVolumeCutout = useBuildingStore((s) => s.finishVolumeCutout)
+  const dragVolumeCutout = useBuildingStore((s) => s.dragVolumeCutout)
   const placeObjectAt = useBuildingStore((s) => s.placeObjectAt)
+  const placeTileOnHit = useBuildingStore((s) => s.placeTileOnHit)
+  const fillTilesOnHit = useBuildingStore((s) => s.fillTilesOnHit)
+  const dragTile = useBuildingStore((s) => s.dragTile)
+  const beginTileCut = useBuildingStore((s) => s.beginTileCut)
+  const finishTileCut = useBuildingStore((s) => s.finishTileCut)
+  const pendingTile = useBuildingStore((s) => s.pendingTile)
+  const tileGroutM = useBuildingStore((s) => s.tileGroutM)
+  const tileSnapEnabled = useBuildingStore((s) => s.tileSnapEnabled)
+  const tileRotation = useBuildingStore((s) => s.tileRotation)
+  const tileFillPattern = useBuildingStore((s) => s.tileFillPattern)
+  const tileCutDraft = useBuildingStore((s) => s.tileCutDraft)
   const clickMepAt = useBuildingStore((s) => s.clickMepAt)
   const dragPlacedObject = useBuildingStore((s) => s.dragPlacedObject)
   const selectAt = useBuildingStore((s) => s.selectAt)
@@ -235,10 +355,13 @@ export function FloorPlanCanvas() {
   const toggleSelectVertex = useBuildingStore((s) => s.toggleSelectVertex)
   const selectEdgePoint = useBuildingStore((s) => s.selectEdgePoint)
   const setSelection = useBuildingStore((s) => s.setSelection)
+  const toggleSelectTile = useBuildingStore((s) => s.toggleSelectTile)
   const setFixedLengthValue = useBuildingStore((s) => s.setFixedLengthValue)
   const openingDragActive = useRef(false)
   const slabDragActive = useRef(false)
   const plateDragActive = useRef(false)
+  const boxDragActive = useRef(false)
+  const cutoutDragActive = useRef(false)
   const openingMove = useRef<{
     id: string
     start: { x: number; y: number }
@@ -259,6 +382,20 @@ export function FloorPlanCanvas() {
     moved: boolean
   } | null>(null)
   const plateMoveMoved = useRef(false)
+  const boxMove = useRef<{
+    id: string
+    start: { x: number; y: number }
+    origin: { x: number; y: number }
+    moved: boolean
+  } | null>(null)
+  const boxMoveMoved = useRef(false)
+  const cutoutMove = useRef<{
+    id: string
+    start: { x: number; y: number }
+    origin: { x: number; y: number }
+    moved: boolean
+  } | null>(null)
+  const cutoutMoveMoved = useRef(false)
   const objectMove = useRef<{
     id: string
     start: { x: number; y: number }
@@ -266,6 +403,14 @@ export function FloorPlanCanvas() {
     moved: boolean
   } | null>(null)
   const objectMoveMoved = useRef(false)
+  const tileMove = useRef<{
+    id: string
+    ids: string[]
+    start: { x: number; y: number }
+    origin: { u: number; v: number }
+    moved: boolean
+  } | null>(null)
+  const tileMoveMoved = useRef(false)
 
   const lowerFloor = useMemo(() => {
     const idx = building.floors.findIndex((f) => f.id === activeFloorId)
@@ -275,6 +420,45 @@ export function FloorPlanCanvas() {
     if (prev.kind === 'ground') return null
     return prev
   }, [building.floors, activeFloorId])
+
+  const tileGhosts = useMemo(() => {
+    if (!pointer || !pendingTile) return []
+    if (tool === 'fillTile') {
+      return fillTilesOnSurface(
+        pendingTile,
+        { type: 'floor' },
+        pointer.x,
+        pointer.y,
+        tileGroutM,
+        tileRotation,
+        tileFillPattern,
+        floor,
+      ).slice(0, 200)
+    }
+    if (tool === 'placeTile') {
+      const tile = layoutTile(
+        pendingTile,
+        { type: 'floor' },
+        pointer.x,
+        pointer.y,
+        tileGroutM,
+        tileRotation,
+        floor,
+        { snap: tileSnapEnabled },
+      )
+      return tile ? [tile] : []
+    }
+    return []
+  }, [
+    pointer,
+    pendingTile,
+    tool,
+    tileGroutM,
+    tileRotation,
+    tileFillPattern,
+    tileSnapEnabled,
+    floor,
+  ])
 
   const fitView = useCallback(
     (nextScale = DEFAULT_SCALE) => {
@@ -446,6 +630,24 @@ export function FloorPlanCanvas() {
       beginFloorPlate(w.x, w.y)
       return
     }
+    if (isVolumeBoxTool(tool) && evt.button === 0) {
+      const stage = e.target.getStage()
+      const pos = stage?.getPointerPosition()
+      if (!pos) return
+      const w = toWorld(pos.x, pos.y)
+      boxDragActive.current = true
+      beginVolumeBox(w.x, w.y)
+      return
+    }
+    if (isVolumeCutoutTool(tool) && evt.button === 0) {
+      const stage = e.target.getStage()
+      const pos = stage?.getPointerPosition()
+      if (!pos) return
+      const w = toWorld(pos.x, pos.y)
+      cutoutDragActive.current = true
+      beginVolumeCutout(w.x, w.y)
+      return
+    }
     if (tool !== 'select') return
     if (e.target !== e.target.getStage()) return
     if (lengthEdit) {
@@ -489,6 +691,16 @@ export function FloorPlanCanvas() {
       return
     }
 
+    if (boxDragActive.current && boxDraft) {
+      updateVolumeBoxDraft(w.x, w.y)
+      return
+    }
+
+    if (cutoutDragActive.current && cutoutDraft) {
+      updateVolumeCutoutDraft(w.x, w.y)
+      return
+    }
+
     if (openingMove.current) {
       const drag = openingMove.current
       const dx = w.x - drag.start.x
@@ -525,6 +737,45 @@ export function FloorPlanCanvas() {
         pushHistory()
       }
       dragFloorPlate(drag.id, drag.origin.x + dx, drag.origin.y + dy)
+      return
+    }
+
+    if (boxMove.current) {
+      const drag = boxMove.current
+      const dx = w.x - drag.start.x
+      const dy = w.y - drag.start.y
+      if (!drag.moved && Math.hypot(dx, dy) < 0.02) return
+      if (!drag.moved) {
+        drag.moved = true
+        pushHistory()
+      }
+      dragVolumeBox(drag.id, drag.origin.x + dx, drag.origin.y + dy)
+      return
+    }
+
+    if (cutoutMove.current) {
+      const drag = cutoutMove.current
+      const dx = w.x - drag.start.x
+      const dy = w.y - drag.start.y
+      if (!drag.moved && Math.hypot(dx, dy) < 0.02) return
+      if (!drag.moved) {
+        drag.moved = true
+        pushHistory()
+      }
+      dragVolumeCutout(drag.id, drag.origin.x + dx, drag.origin.y + dy)
+      return
+    }
+
+    if (tileMove.current) {
+      const drag = tileMove.current
+      const dx = w.x - drag.start.x
+      const dy = w.y - drag.start.y
+      if (!drag.moved && Math.hypot(dx, dy) < 0.02) return
+      if (!drag.moved) {
+        drag.moved = true
+        pushHistory()
+      }
+      dragTile(drag.id, drag.origin.u + dx, drag.origin.v + dy, drag.ids)
       return
     }
 
@@ -574,17 +825,27 @@ export function FloorPlanCanvas() {
     }
     if (openingDragActive.current) {
       openingDragActive.current = false
-      if (openingDraft) finishOpening()
+      finishOpening()
       return
     }
     if (slabDragActive.current) {
       slabDragActive.current = false
-      if (slabOpeningDraft) finishSlabOpening()
+      finishSlabOpening()
       return
     }
     if (plateDragActive.current) {
       plateDragActive.current = false
-      if (floorPlateDraft) finishFloorPlate()
+      finishFloorPlate()
+      return
+    }
+    if (boxDragActive.current) {
+      boxDragActive.current = false
+      finishVolumeBox()
+      return
+    }
+    if (cutoutDragActive.current) {
+      cutoutDragActive.current = false
+      finishVolumeCutout()
       return
     }
     if (openingMove.current) {
@@ -604,6 +865,27 @@ export function FloorPlanCanvas() {
     if (plateMove.current) {
       plateMoveMoved.current = plateMove.current.moved
       plateMove.current = null
+      marqueeActive.current = false
+      setMarquee(null)
+      return
+    }
+    if (boxMove.current) {
+      boxMoveMoved.current = boxMove.current.moved
+      boxMove.current = null
+      marqueeActive.current = false
+      setMarquee(null)
+      return
+    }
+    if (cutoutMove.current) {
+      cutoutMoveMoved.current = cutoutMove.current.moved
+      cutoutMove.current = null
+      marqueeActive.current = false
+      setMarquee(null)
+      return
+    }
+    if (tileMove.current) {
+      tileMoveMoved.current = tileMove.current.moved
+      tileMove.current = null
       marqueeActive.current = false
       setMarquee(null)
       return
@@ -637,7 +919,14 @@ export function FloorPlanCanvas() {
   }
 
   const onStageClick = (e: Konva.KonvaEventObject<MouseEvent>) => {
-    if (tool === 'select' || isWallOpeningTool(tool) || isStairTool(tool)) return
+    if (
+      tool === 'select' ||
+      isWallOpeningTool(tool) ||
+      isStairTool(tool) ||
+      isVolumeBoxTool(tool) ||
+      isVolumeCutoutTool(tool)
+    )
+      return
     const stage = e.target.getStage()
     if (!stage) return
     const pos = stage.getPointerPosition()
@@ -646,6 +935,22 @@ export function FloorPlanCanvas() {
 
     if (tool === 'placeObject') {
       placeObjectAt(w.x, w.y)
+      return
+    }
+    if (tool === 'placeTile') {
+      placeTileOnHit({ type: 'floor' }, w.x, w.y)
+      return
+    }
+    if (tool === 'fillTile') {
+      fillTilesOnHit({ type: 'floor' }, w.x, w.y)
+      return
+    }
+    if (tool === 'cutTile') {
+      const hit = hitFloorTile(floor, w.x, w.y)
+      const tileId = tileCutDraft?.tileId ?? hit?.id ?? selectedTileIds(selection)[0]
+      if (!tileId) return
+      if (!tileCutDraft?.a) beginTileCut(tileId, w.x, w.y)
+      else finishTileCut(w.x, w.y, !e.evt.shiftKey)
       return
     }
     if (tool === 'wall') {
@@ -1329,6 +1634,213 @@ export function FloorPlanCanvas() {
             )
           })}
 
+          {(floor.tiles ?? [])
+            .filter((t) => t.surface.type === 'floor')
+            .map((tile) => {
+              const selected = isTileSelected(selection, tile.id)
+              return (
+                <Group key={tile.id}>
+                  <FloorTileShape
+                    tile={tile}
+                    toScreen={toScreen}
+                    selected={selected}
+                    onMouseEnter={(e) => {
+                      if (tool !== 'select') return
+                      const c = e.target.getStage()?.container()
+                      if (c) c.style.cursor = 'grab'
+                    }}
+                    onMouseLeave={(e) => {
+                      const c = e.target.getStage()?.container()
+                      if (c) c.style.cursor = 'default'
+                    }}
+                    onMouseDown={(e) => {
+                      if (tool !== 'select' || e.evt.button !== 0) return
+                      if (spaceDown.current || e.evt.altKey) return
+                      if (e.evt.shiftKey) return
+                      e.cancelBubble = true
+                      marqueeActive.current = false
+                      setMarquee(null)
+                      const already = isTileSelected(selection, tile.id)
+                      const ids = already
+                        ? selectedTileIds(selection)
+                        : [tile.id]
+                      if (!already) setSelection({ kind: 'tile', id: tile.id })
+                      const stage = e.target.getStage()
+                      const pos = stage?.getPointerPosition()
+                      const w = pos ? toWorld(pos.x, pos.y) : { x: 0, y: 0 }
+                      tileMove.current = {
+                        id: tile.id,
+                        ids,
+                        start: { x: w.x, y: w.y },
+                        origin: { u: tile.u, v: tile.v },
+                        moved: false,
+                      }
+                      const c = e.target.getStage()?.container()
+                      if (c) c.style.cursor = 'grabbing'
+                    }}
+                    onClick={(e) => {
+                      e.cancelBubble = true
+                      if (tileMoveMoved.current) {
+                        tileMoveMoved.current = false
+                        return
+                      }
+                      if (tool === 'select') {
+                        toggleSelectTile(tile.id, e.evt.shiftKey)
+                      }
+                      if (tool === 'cutTile') {
+                        const stage = e.target.getStage()
+                        const pos = stage?.getPointerPosition()
+                        const at = pos ? toWorld(pos.x, pos.y) : { x: tile.u, y: tile.v }
+                        if (!tileCutDraft?.a) beginTileCut(tile.id, at.x, at.y)
+                        else finishTileCut(at.x, at.y, !e.evt.shiftKey)
+                      }
+                    }}
+                  />
+                </Group>
+              )
+            })}
+
+          {(floor.boxes ?? []).map((box) => {
+            const selected = isVolumeBoxSelected(selection, box.id)
+            const rect = volumeBoxRect(box)
+            const hitPts = worldRingToScreen(rect, toScreen)
+            const mid = toScreen(box.x, box.y)
+            return (
+              <Group key={box.id}>
+                <Line
+                  points={hitPts}
+                  closed
+                  fill={
+                    selected
+                      ? 'rgba(196, 92, 38, 0.2)'
+                      : 'rgba(138, 106, 69, 0.2)'
+                  }
+                  stroke={selected ? '#c45c26' : '#8a6a45'}
+                  strokeWidth={selected ? 2 : 1.5}
+                  onMouseEnter={(e) => {
+                    if (tool !== 'select') return
+                    const c = e.target.getStage()?.container()
+                    if (c) c.style.cursor = 'grab'
+                  }}
+                  onMouseLeave={(e) => {
+                    const c = e.target.getStage()?.container()
+                    if (c) c.style.cursor = 'default'
+                  }}
+                  onMouseDown={(e) => {
+                    if (tool !== 'select' || e.evt.button !== 0) return
+                    if (e.evt.shiftKey || spaceDown.current || e.evt.altKey)
+                      return
+                    e.cancelBubble = true
+                    marqueeActive.current = false
+                    setMarquee(null)
+                    setSelection({ kind: 'volumeBox', id: box.id })
+                    const stage = e.target.getStage()
+                    const pos = stage?.getPointerPosition()
+                    const w = pos ? toWorld(pos.x, pos.y) : { x: 0, y: 0 }
+                    boxMove.current = {
+                      id: box.id,
+                      start: { x: w.x, y: w.y },
+                      origin: { x: box.x, y: box.y },
+                      moved: false,
+                    }
+                    const c = e.target.getStage()?.container()
+                    if (c) c.style.cursor = 'grabbing'
+                  }}
+                  onClick={(e) => {
+                    e.cancelBubble = true
+                    if (boxMoveMoved.current) {
+                      boxMoveMoved.current = false
+                      return
+                    }
+                    if (tool === 'select') {
+                      setSelection({ kind: 'volumeBox', id: box.id })
+                    }
+                  }}
+                />
+                <Text
+                  x={mid.x - 8}
+                  y={mid.y - 8}
+                  text="К"
+                  fontSize={14}
+                  fontFamily="IBM Plex Sans, sans-serif"
+                  fill={selected ? '#c45c26' : '#8a6a45'}
+                  listening={false}
+                />
+              </Group>
+            )
+          })}
+
+          {(floor.boxCutouts ?? []).map((cut) => {
+            const selected = isVolumeCutoutSelected(selection, cut.id)
+            const rect = volumeCutoutRect(cut)
+            const hitPts = worldRingToScreen(rect, toScreen)
+            const mid = toScreen(cut.x, cut.y)
+            return (
+              <Group key={cut.id}>
+                <Line
+                  points={hitPts}
+                  closed
+                  fill={
+                    selected
+                      ? 'rgba(196, 92, 38, 0.16)'
+                      : 'rgba(90, 64, 48, 0.12)'
+                  }
+                  stroke={selected ? '#c45c26' : '#5a4030'}
+                  strokeWidth={selected ? 2 : 1.5}
+                  dash={[5, 4]}
+                  onMouseEnter={(e) => {
+                    if (tool !== 'select') return
+                    const c = e.target.getStage()?.container()
+                    if (c) c.style.cursor = 'grab'
+                  }}
+                  onMouseLeave={(e) => {
+                    const c = e.target.getStage()?.container()
+                    if (c) c.style.cursor = 'default'
+                  }}
+                  onMouseDown={(e) => {
+                    if (tool !== 'select' || e.evt.button !== 0) return
+                    if (e.evt.shiftKey || spaceDown.current || e.evt.altKey)
+                      return
+                    e.cancelBubble = true
+                    marqueeActive.current = false
+                    setMarquee(null)
+                    setSelection({ kind: 'volumeCutout', id: cut.id })
+                    const stage = e.target.getStage()
+                    const pos = stage?.getPointerPosition()
+                    const w = pos ? toWorld(pos.x, pos.y) : { x: 0, y: 0 }
+                    cutoutMove.current = {
+                      id: cut.id,
+                      start: { x: w.x, y: w.y },
+                      origin: { x: cut.x, y: cut.y },
+                      moved: false,
+                    }
+                    const c = e.target.getStage()?.container()
+                    if (c) c.style.cursor = 'grabbing'
+                  }}
+                  onClick={(e) => {
+                    e.cancelBubble = true
+                    if (cutoutMoveMoved.current) {
+                      cutoutMoveMoved.current = false
+                      return
+                    }
+                    if (tool === 'select') {
+                      setSelection({ kind: 'volumeCutout', id: cut.id })
+                    }
+                  }}
+                />
+                <Text
+                  x={mid.x - 7}
+                  y={mid.y - 8}
+                  text="В"
+                  fontSize={13}
+                  fontFamily="IBM Plex Sans, sans-serif"
+                  fill={selected ? '#c45c26' : '#5a4030'}
+                  listening={false}
+                />
+              </Group>
+            )
+          })}
+
           {(floor.objects ?? []).map((obj) => {
             const selected = isObjectSelected(selection, obj.id)
             const mid = toScreen(obj.x, obj.y)
@@ -1478,6 +1990,72 @@ export function FloorPlanCanvas() {
               )
             })()}
 
+          {boxDraft &&
+            (() => {
+              const preview = createVolumeBoxFromDrag(
+                boxDraft.x0,
+                boxDraft.y0,
+                boxDraft.x1,
+                boxDraft.y1,
+              )
+              const pts = worldRingToScreen(volumeBoxRect(preview), toScreen)
+              return (
+                <Line
+                  points={pts}
+                  closed
+                  fill="rgba(138, 106, 69, 0.22)"
+                  stroke="#8a6a45"
+                  strokeWidth={1.5}
+                  dash={[5, 4]}
+                  listening={false}
+                />
+              )
+            })()}
+
+          {cutoutDraft &&
+            (() => {
+              const host = (floor.boxes ?? [])[0]
+              if (!host) {
+                const preview = createVolumeBoxFromDrag(
+                  cutoutDraft.x0,
+                  cutoutDraft.y0,
+                  cutoutDraft.x1,
+                  cutoutDraft.y1,
+                )
+                const pts = worldRingToScreen(volumeBoxRect(preview), toScreen)
+                return (
+                  <Line
+                    points={pts}
+                    closed
+                    fill="rgba(90, 64, 48, 0.16)"
+                    stroke="#5a4030"
+                    strokeWidth={1.5}
+                    dash={[5, 4]}
+                    listening={false}
+                  />
+                )
+              }
+              const preview = createVolumeCutoutFromDrag(
+                cutoutDraft.x0,
+                cutoutDraft.y0,
+                cutoutDraft.x1,
+                cutoutDraft.y1,
+                host,
+              )
+              const pts = worldRingToScreen(volumeCutoutRect(preview), toScreen)
+              return (
+                <Line
+                  points={pts}
+                  closed
+                  fill="rgba(90, 64, 48, 0.16)"
+                  stroke="#5a4030"
+                  strokeWidth={1.5}
+                  dash={[5, 4]}
+                  listening={false}
+                />
+              )
+            })()}
+
           {floor.vertices.map((v) => {
             const s = toScreen(v.x, v.y)
             const selected = isVertexSelected(selection, v.id)
@@ -1554,6 +2132,35 @@ export function FloorPlanCanvas() {
           />
           {workbench === 'draft' && (
             <ConstraintPictograms floor={floor} toScreen={toScreen} />
+          )}
+          {tileGhosts.map((tile) => (
+            <FloorTileShape
+              key={`ghost-${tile.id}`}
+              tile={tile}
+              toScreen={toScreen}
+              ghost
+              listening={false}
+            />
+          ))}
+          {tileCutDraft?.a && pointer && (
+            <Line
+              points={[
+                toScreen(tileCutDraft.a.u, tileCutDraft.a.v).x,
+                toScreen(tileCutDraft.a.u, tileCutDraft.a.v).y,
+                toScreen(
+                  tileCutDraft.b?.u ?? pointer.x,
+                  tileCutDraft.b?.v ?? pointer.y,
+                ).x,
+                toScreen(
+                  tileCutDraft.b?.u ?? pointer.x,
+                  tileCutDraft.b?.v ?? pointer.y,
+                ).y,
+              ]}
+              stroke="#c45c26"
+              strokeWidth={1.5}
+              dash={[6, 4]}
+              listening={false}
+            />
           )}
           {marqueeRect}
         </Layer>

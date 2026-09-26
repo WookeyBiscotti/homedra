@@ -75,13 +75,23 @@ import {
   type PipeSegment,
   PIPE_MEDIUM_META,
   type PlacedObject,
+  type PlacedTile,
+  type TileFillPattern,
+  type TileSpec,
+  type TileSurface,
   clonePlacedObject,
+  DEFAULT_TILE_GROUT_M,
+  isTilingTool,
   normalizeFloorVisibility,
+  normalizeTileRotation,
   recalcFloorElevations,
   type SceneMode,
   type Selection,
+  sameTileSurface,
+  selectedTileIds,
   selectedVertexIds,
   selectedWallIds,
+  tileSelectionOf,
   storyFloors,
   type Tool,
   type TransformGizmoMode,
@@ -111,6 +121,35 @@ import {
   setFloorPlateMaterial as applyFloorPlateMaterial,
   updateFloorPlateFields,
 } from '../engine/geometry/floorPlates'
+import {
+  createVolumeBoxFromDrag,
+  createVolumeCutoutFromDrag,
+  findBoxForCutout,
+  hitVolumeBox,
+  hitVolumeCutout,
+  moveVolumeBox,
+  removeVolumeBox,
+  removeVolumeCutout,
+  setVolumeBoxMaterial as applyVolumeBoxMaterial,
+  setVolumeCutoutMaterial as applyVolumeCutoutMaterial,
+  updateVolumeBoxFields,
+  updateVolumeCutoutFields,
+  volumeBoxCorners,
+} from '../engine/geometry/volumeBoxes'
+import {
+  addTiles,
+  clearTileClip,
+  cutTileByLine,
+  hitFloorTile,
+  hitFloorTilesInRect,
+  moveTile,
+  removeTile,
+  removeTiles,
+  removeTilesForBox,
+  removeTilesForWall,
+  updateTileFields,
+} from '../engine/geometry/tiles'
+import { fillTilesOnSurface, layoutTile } from '../engine/geometry/tileFill'
 import {
   connectMepNodes,
   findMepNodeNear,
@@ -216,6 +255,20 @@ interface BuildingState {
   } | null
   /** Drag-rect draft for free floor plate (no walls) */
   floorPlateDraft: {
+    x0: number
+    y0: number
+    x1: number
+    y1: number
+  } | null
+  /** Drag-rect draft for an architectural box */
+  boxDraft: {
+    x0: number
+    y0: number
+    x1: number
+    y1: number
+  } | null
+  /** Drag-rect draft for a cutout inside a box */
+  cutoutDraft: {
     x0: number
     y0: number
     x1: number
@@ -347,6 +400,91 @@ interface BuildingState {
   ) => void
   /** Select a floor plate, switching active floor if needed. */
   selectFloorPlate: (floorId: string, id: string) => void
+
+  beginVolumeBox: (x: number, y: number) => void
+  updateVolumeBoxDraft: (x: number, y: number) => void
+  finishVolumeBox: () => void
+  cancelVolumeBoxDraft: () => void
+  updateVolumeBox: (
+    id: string,
+    patch: Partial<{
+      x: number
+      y: number
+      width: number
+      depth: number
+      elevation: number
+      height: number
+    }>,
+  ) => void
+  dragVolumeBox: (id: string, x: number, y: number) => void
+  setVolumeBoxMaterial: (id: string, material: MaterialRef | null) => void
+  selectVolumeBox: (floorId: string, id: string) => void
+
+  beginVolumeCutout: (x: number, y: number) => void
+  updateVolumeCutoutDraft: (x: number, y: number) => void
+  finishVolumeCutout: () => void
+  cancelVolumeCutoutDraft: () => void
+  updateVolumeCutout: (
+    id: string,
+    patch: Partial<{
+      x: number
+      y: number
+      width: number
+      depth: number
+      elevation: number
+      height: number
+    }>,
+  ) => void
+  dragVolumeCutout: (id: string, x: number, y: number) => void
+  setVolumeCutoutMaterial: (id: string, material: MaterialRef | null) => void
+  selectVolumeCutout: (floorId: string, id: string) => void
+
+  pendingTile: TileSpec | null
+  tileGroutM: number
+  tileSnapEnabled: boolean
+  tileFillPattern: TileFillPattern
+  tileRotation: number
+  tileCutDraft: {
+    tileId: string
+    a: { u: number; v: number } | null
+    b: { u: number; v: number } | null
+  } | null
+  setPendingTile: (spec: TileSpec | null) => void
+  setTileGroutM: (m: number) => void
+  setTileSnapEnabled: (enabled: boolean) => void
+  toggleTileSnap: () => void
+  setTileFillPattern: (pattern: TileFillPattern) => void
+  setTileRotation: (radians: number) => void
+  rotateTileOrPending: () => void
+  placeTileOnHit: (surface: TileSurface, u: number, v: number) => boolean
+  fillTilesOnHit: (surface: TileSurface, u: number, v: number) => number
+  updateTile: (
+    id: string,
+    patch: Partial<
+      Pick<
+        PlacedTile,
+        | 'name'
+        | 'width'
+        | 'length'
+        | 'thickness'
+        | 'material'
+        | 'u'
+        | 'v'
+        | 'rotation'
+        | 'groutM'
+        | 'clip'
+        | 'texRegion'
+      >
+    >,
+  ) => void
+  dragTile: (id: string, u: number, v: number, ids?: string[]) => void
+  selectTile: (floorId: string, id: string, shift?: boolean) => void
+  toggleSelectTile: (id: string, shift: boolean) => void
+  resetTileClip: (id: string) => void
+  beginTileCut: (tileId: string, u: number, v: number) => void
+  updateTileCut: (u: number, v: number) => void
+  finishTileCut: (u: number, v: number, keepBoth?: boolean) => void
+  cancelTileCut: () => void
 
   /** Pending model to place with the placeObject tool (3D or 2D). */
   pendingModel: {
@@ -602,6 +740,14 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     openingDraft: null,
     slabOpeningDraft: null,
     floorPlateDraft: null,
+    boxDraft: null,
+    cutoutDraft: null,
+    pendingTile: null,
+    tileGroutM: DEFAULT_TILE_GROUT_M,
+    tileSnapEnabled: true,
+    tileFillPattern: 'straight',
+    tileRotation: 0,
+    tileCutDraft: null,
     pendingModel: null,
     modelBrowserOpen: false,
     collectionBrowserOpen: false,
@@ -657,6 +803,8 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         openingDraft: null,
         slabOpeningDraft: null,
         floorPlateDraft: null,
+    boxDraft: null,
+    cutoutDraft: null,
       })
     },
 
@@ -675,6 +823,8 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         openingDraft: null,
         slabOpeningDraft: null,
         floorPlateDraft: null,
+    boxDraft: null,
+    cutoutDraft: null,
       })
     },
 
@@ -699,6 +849,8 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
             openingDraft: null,
             slabOpeningDraft: null,
             floorPlateDraft: null,
+    boxDraft: null,
+    cutoutDraft: null,
             pendingPlantSpecies: null,
             statusMessage: 'Выберите объект в коллекции слева',
           })
@@ -712,6 +864,8 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
           openingDraft: null,
           slabOpeningDraft: null,
           floorPlateDraft: null,
+    boxDraft: null,
+    cutoutDraft: null,
           collectionBrowserOpen: false,
           modelBrowserOpen: false,
           viewMode: '3d',
@@ -727,6 +881,11 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       }
       if (isElectricalTool(tool) && workbench !== 'electrical') {
         get().setWorkbench('electrical')
+        get().setTool(tool)
+        return
+      }
+      if (isTilingTool(tool) && workbench !== 'tiling') {
+        get().setWorkbench('tiling')
         get().setTool(tool)
         return
       }
@@ -748,6 +907,9 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         openingDraft: null,
         slabOpeningDraft: null,
         floorPlateDraft: null,
+    boxDraft: null,
+    cutoutDraft: null,
+        tileCutDraft: null,
         statusMessage: null,
       })
     },
@@ -759,6 +921,8 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         openingDraft: null,
         slabOpeningDraft: null,
         floorPlateDraft: null,
+    boxDraft: null,
+    cutoutDraft: null,
         statusMessage: null as string | null,
       }
       if (workbench === 'draft') {
@@ -791,6 +955,25 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
           workbench,
           sceneMode: prev === 'paint' ? 'interior' : prev,
           tool: 'select',
+          modelBrowserOpen: false,
+          collectionBrowserOpen: false,
+          ...drafts,
+        })
+        return
+      }
+      if (workbench === 'tiling') {
+        const tileSel = get().selection
+        set({
+          workbench,
+          viewMode: '3d',
+          sceneMode: prev === 'paint' ? 'interior' : prev,
+          tool: 'select',
+          selection:
+            tileSel?.kind === 'tile' || tileSel?.kind === 'tiles'
+              ? tileSel
+              : null,
+          pendingModel: null,
+          tileCutDraft: null,
           modelBrowserOpen: false,
           collectionBrowserOpen: false,
           ...drafts,
@@ -868,6 +1051,8 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         openingDraft: null,
         slabOpeningDraft: null,
         floorPlateDraft: null,
+    boxDraft: null,
+    cutoutDraft: null,
         statusMessage: null,
       }),
     selectSlabOpening: (floorId, id) =>
@@ -878,6 +1063,8 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         openingDraft: null,
         slabOpeningDraft: null,
         floorPlateDraft: null,
+    boxDraft: null,
+    cutoutDraft: null,
         statusMessage: null,
       }),
     setBuildingName: (name) => {
@@ -958,6 +1145,8 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         openingDraft: null,
         slabOpeningDraft: null,
         floorPlateDraft: null,
+    boxDraft: null,
+    cutoutDraft: null,
         conflict: false,
         ...(floor && isGroundFloor(floor) && get().workbench !== 'landscape'
           ? { tool: 'select' as const }
@@ -1675,6 +1864,8 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         building: replaceFloor(get().building, next),
         slabOpeningDraft: null,
         floorPlateDraft: null,
+    boxDraft: null,
+    cutoutDraft: null,
         selection: { kind: 'slabOpening', id: opening.id },
         statusMessage: null,
       })
@@ -1715,6 +1906,8 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       set({
         building: replaceFloor(get().building, next),
         floorPlateDraft: null,
+    boxDraft: null,
+    cutoutDraft: null,
         selection: { kind: 'floorPlate', id: plate.id },
         statusMessage: null,
       })
@@ -1755,8 +1948,409 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         openingDraft: null,
         slabOpeningDraft: null,
         floorPlateDraft: null,
+        boxDraft: null,
+        cutoutDraft: null,
       })
     },
+
+    beginVolumeBox: (x, y) => {
+      if (isGroundFloor(get().activeFloor())) return
+      if (get().tool !== 'box') return
+      set({
+        boxDraft: { x0: x, y0: y, x1: x, y1: y },
+        statusMessage: null,
+      })
+    },
+
+    updateVolumeBoxDraft: (x, y) => {
+      const draft = get().boxDraft
+      if (!draft) return
+      set({ boxDraft: { ...draft, x1: x, y1: y } })
+    },
+
+    finishVolumeBox: () => {
+      const draft = get().boxDraft
+      if (!draft) return
+      const box = createVolumeBoxFromDrag(draft.x0, draft.y0, draft.x1, draft.y1)
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const next: Floor = {
+        ...floor,
+        boxes: [...(floor.boxes ?? []), box],
+      }
+      set({
+        building: replaceFloor(get().building, next),
+        boxDraft: null,
+        selection: { kind: 'volumeBox', id: box.id },
+        statusMessage: null,
+      })
+    },
+
+    cancelVolumeBoxDraft: () => set({ boxDraft: null }),
+
+    updateVolumeBox: (id, patch) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const next = updateVolumeBoxFields(floor, id, patch)
+      set({ building: replaceFloor(get().building, next) })
+    },
+
+    dragVolumeBox: (id, x, y) => {
+      const floor = get().activeFloor()
+      const next = moveVolumeBox(floor, id, x, y)
+      set({
+        building: replaceFloor(get().building, next),
+        selection: { kind: 'volumeBox', id },
+      })
+    },
+
+    setVolumeBoxMaterial: (id, material) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const next = applyVolumeBoxMaterial(floor, id, material)
+      set({ building: replaceFloor(get().building, next) })
+    },
+
+    selectVolumeBox: (floorId, id) => {
+      const floor = get().building.floors.find((f) => f.id === floorId)
+      if (!floor?.boxes?.some((b) => b.id === id)) return
+      set({
+        activeFloorId: floorId,
+        selection: { kind: 'volumeBox', id },
+        wallDraftFrom: null,
+        openingDraft: null,
+        slabOpeningDraft: null,
+        floorPlateDraft: null,
+        boxDraft: null,
+        cutoutDraft: null,
+      })
+    },
+
+    beginVolumeCutout: (x, y) => {
+      if (isGroundFloor(get().activeFloor())) return
+      if (get().tool !== 'cutout') return
+      set({
+        cutoutDraft: { x0: x, y0: y, x1: x, y1: y },
+        statusMessage: null,
+      })
+    },
+
+    updateVolumeCutoutDraft: (x, y) => {
+      const draft = get().cutoutDraft
+      if (!draft) return
+      set({ cutoutDraft: { ...draft, x1: x, y1: y } })
+    },
+
+    finishVolumeCutout: () => {
+      const draft = get().cutoutDraft
+      if (!draft) return
+      const floor = get().activeFloor()
+      const preview = createVolumeCutoutFromDrag(
+        draft.x0,
+        draft.y0,
+        draft.x1,
+        draft.y1,
+        {
+          id: '_draft',
+          x: 0,
+          y: 0,
+          width: 1,
+          depth: 1,
+          elevation: 0,
+          height: 1,
+        },
+      )
+      const rect = volumeBoxCorners(preview)
+      const selection = get().selection
+      const preferred =
+        selection?.kind === 'volumeBox' ? selection.id : null
+      const box = findBoxForCutout(floor, rect, preferred)
+      if (!box) {
+        set({
+          cutoutDraft: null,
+          statusMessage: 'Вырез должен пересекаться с коробом',
+        })
+        return
+      }
+      const cut = createVolumeCutoutFromDrag(
+        draft.x0,
+        draft.y0,
+        draft.x1,
+        draft.y1,
+        box,
+      )
+      get().pushHistory()
+      const next: Floor = {
+        ...floor,
+        boxCutouts: [...(floor.boxCutouts ?? []), cut],
+      }
+      set({
+        building: replaceFloor(get().building, next),
+        cutoutDraft: null,
+        selection: { kind: 'volumeCutout', id: cut.id },
+        statusMessage: null,
+      })
+    },
+
+    cancelVolumeCutoutDraft: () => set({ cutoutDraft: null }),
+
+    updateVolumeCutout: (id, patch) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const next = updateVolumeCutoutFields(floor, id, patch)
+      set({ building: replaceFloor(get().building, next) })
+    },
+
+    dragVolumeCutout: (id, x, y) => {
+      const floor = get().activeFloor()
+      const next = updateVolumeCutoutFields(floor, id, { x, y })
+      set({
+        building: replaceFloor(get().building, next),
+        selection: { kind: 'volumeCutout', id },
+      })
+    },
+
+    setVolumeCutoutMaterial: (id, material) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      const next = applyVolumeCutoutMaterial(floor, id, material)
+      set({ building: replaceFloor(get().building, next) })
+    },
+
+    selectVolumeCutout: (floorId, id) => {
+      const floor = get().building.floors.find((f) => f.id === floorId)
+      if (!floor?.boxCutouts?.some((c) => c.id === id)) return
+      set({
+        activeFloorId: floorId,
+        selection: { kind: 'volumeCutout', id },
+        wallDraftFrom: null,
+        openingDraft: null,
+        slabOpeningDraft: null,
+        floorPlateDraft: null,
+        boxDraft: null,
+        cutoutDraft: null,
+      })
+    },
+
+    setPendingTile: (pendingTile) => {
+      set({
+        pendingTile,
+        tool: pendingTile ? get().tool === 'fillTile' || get().tool === 'cutTile'
+          ? get().tool
+          : 'placeTile' : get().tool,
+        tileCutDraft: null,
+      })
+    },
+    setTileGroutM: (m) =>
+      set({ tileGroutM: Math.max(0, Math.min(0.04, m)) }),
+    setTileSnapEnabled: (tileSnapEnabled) => set({ tileSnapEnabled }),
+    toggleTileSnap: () => set({ tileSnapEnabled: !get().tileSnapEnabled }),
+    setTileFillPattern: (tileFillPattern) => set({ tileFillPattern }),
+    setTileRotation: (radians) =>
+      set({ tileRotation: normalizeTileRotation(radians) }),
+    rotateTileOrPending: () => {
+      const next = normalizeTileRotation(get().tileRotation + Math.PI / 2)
+      set({ tileRotation: next })
+      const ids = selectedTileIds(get().selection)
+      if (ids.length === 0) return
+      get().pushHistory()
+      let floor = get().activeFloor()
+      for (const id of ids) {
+        floor = updateTileFields(floor, id, { rotation: next })
+      }
+      set({ building: replaceFloor(get().building, floor) })
+    },
+    placeTileOnHit: (surface, u, v) => {
+      const spec = get().pendingTile
+      if (!spec) {
+        set({ statusMessage: 'Выберите плитку в коллекции' })
+        return false
+      }
+      const floor = get().activeFloor()
+      const tile = layoutTile(
+        spec,
+        surface,
+        u,
+        v,
+        get().tileGroutM,
+        get().tileRotation,
+        floor,
+        { snap: get().tileSnapEnabled },
+      )
+      if (!tile) {
+        set({ statusMessage: 'Некуда класть плитку' })
+        return false
+      }
+      get().pushHistory()
+      const next = addTiles(get().activeFloor(), [tile])
+      set({
+        building: replaceFloor(get().building, next),
+        selection: { kind: 'tile', id: tile.id },
+        statusMessage: null,
+      })
+      return true
+    },
+    fillTilesOnHit: (surface, u, v) => {
+      const spec = get().pendingTile
+      if (!spec) {
+        set({ statusMessage: 'Выберите плитку в коллекции' })
+        return 0
+      }
+      const floor = get().activeFloor()
+      const tiles = fillTilesOnSurface(
+        spec,
+        surface,
+        u,
+        v,
+        get().tileGroutM,
+        get().tileRotation,
+        get().tileFillPattern,
+        floor,
+      )
+      if (tiles.length === 0) {
+        set({ statusMessage: 'Нечего заливать' })
+        return 0
+      }
+      get().pushHistory()
+      const next = addTiles(get().activeFloor(), tiles)
+      set({
+        building: replaceFloor(get().building, next),
+        selection: { kind: 'tile', id: tiles[0]!.id },
+        statusMessage: `Уложено ${tiles.length}`,
+      })
+      return tiles.length
+    },
+    updateTile: (id, patch) => {
+      get().pushHistory()
+      const next = updateTileFields(get().activeFloor(), id, patch)
+      set({ building: replaceFloor(get().building, next) })
+    },
+    dragTile: (id, u, v, ids) => {
+      const floor = get().activeFloor()
+      const primary = (floor.tiles ?? []).find((t) => t.id === id)
+      if (!primary) return
+      const group = (ids && ids.length > 0 ? ids : [id]).filter((tid) => {
+        const t = (floor.tiles ?? []).find((x) => x.id === tid)
+        return t && sameTileSurface(t.surface, primary.surface)
+      })
+      if (!group.includes(id)) group.unshift(id)
+      const laid = layoutTile(
+        primary,
+        primary.surface,
+        u,
+        v,
+        get().tileGroutM,
+        primary.rotation,
+        floor,
+        { snap: get().tileSnapEnabled, excludeIds: group },
+      )
+      const nextU = laid?.u ?? u
+      const nextV = laid?.v ?? v
+      const du = nextU - primary.u
+      const dv = nextV - primary.v
+      let nextFloor = floor
+      for (const tid of group) {
+        const tile = (nextFloor.tiles ?? []).find((t) => t.id === tid)
+        if (!tile) continue
+        if (tid === id) {
+          nextFloor = laid
+            ? updateTileFields(nextFloor, tid, {
+                u: laid.u,
+                v: laid.v,
+                clip: laid.clip,
+              })
+            : moveTile(nextFloor, tid, nextU, nextV)
+          continue
+        }
+        const companion = layoutTile(
+          tile,
+          tile.surface,
+          tile.u + du,
+          tile.v + dv,
+          get().tileGroutM,
+          tile.rotation,
+          nextFloor,
+          { snap: false, excludeIds: group },
+        )
+        nextFloor = companion
+          ? updateTileFields(nextFloor, tid, {
+              u: companion.u,
+              v: companion.v,
+              clip: companion.clip,
+            })
+          : moveTile(nextFloor, tid, tile.u + du, tile.v + dv)
+      }
+      set({
+        building: replaceFloor(get().building, nextFloor),
+        selection: tileSelectionOf(group),
+      })
+    },
+    toggleSelectTile: (id, shift) => {
+      const floor = get().activeFloor()
+      if (!floor.tiles?.some((t) => t.id === id)) return
+      if (!shift) {
+        set({ selection: { kind: 'tile', id }, tileCutDraft: null })
+        return
+      }
+      const ids = new Set(selectedTileIds(get().selection))
+      if (ids.has(id)) ids.delete(id)
+      else ids.add(id)
+      set({ selection: tileSelectionOf([...ids]), tileCutDraft: null })
+    },
+    selectTile: (floorId, id, shift = false) => {
+      const floor = get().building.floors.find((f) => f.id === floorId)
+      if (!floor?.tiles?.some((t) => t.id === id)) return
+      set({ activeFloorId: floorId })
+      get().toggleSelectTile(id, shift)
+    },
+    resetTileClip: (id) => {
+      get().pushHistory()
+      set({
+        building: replaceFloor(get().building, clearTileClip(get().activeFloor(), id)),
+      })
+    },
+    beginTileCut: (tileId, u, v) => {
+      set({
+        tool: 'cutTile',
+        selection: { kind: 'tile', id: tileId },
+        tileCutDraft: { tileId, a: { u, v }, b: null },
+      })
+    },
+    updateTileCut: (u, v) => {
+      const draft = get().tileCutDraft
+      if (!draft?.a) return
+      set({ tileCutDraft: { ...draft, b: { u, v } } })
+    },
+    finishTileCut: (u, v, keepBoth = true) => {
+      const draft = get().tileCutDraft
+      if (!draft?.a) {
+        const sel = get().selection
+        const tileId = selectedTileIds(sel).at(0)
+        if (tileId) get().beginTileCut(tileId, u, v)
+        return
+      }
+      const floor = get().activeFloor()
+      const tile = (floor.tiles ?? []).find((t) => t.id === draft.tileId)
+      if (!tile) {
+        set({ tileCutDraft: null })
+        return
+      }
+      if (Math.hypot(u - draft.a.u, v - draft.a.v) < 0.02) {
+        set({ tileCutDraft: null })
+        return
+      }
+      const a = { x: draft.a.u, y: draft.a.v }
+      const b = { x: u, y: v }
+      const pieces = cutTileByLine(tile, a, b, b, keepBoth)
+      get().pushHistory()
+      const rest = (floor.tiles ?? []).filter((t) => t.id !== tile.id)
+      set({
+        building: replaceFloor(get().building, { ...floor, tiles: [...rest, ...pieces] }),
+        selection: { kind: 'tile', id: pieces[0]!.id },
+        tileCutDraft: null,
+      })
+    },
+    cancelTileCut: () => set({ tileCutDraft: null }),
 
     updateSlabOpening: (id, patch) => {
       get().pushHistory()
@@ -1984,6 +2578,8 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         openingDraft: null,
         slabOpeningDraft: null,
         floorPlateDraft: null,
+    boxDraft: null,
+    cutoutDraft: null,
         // Stop placement mode so gizmo / LMB work on the object
         pendingModel: null,
         tool: 'select',
@@ -2465,6 +3061,15 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         set({ selection: null })
         return
       }
+      if (get().workbench === 'tiling') {
+        const tile = hitFloorTile(floor, x, y)
+        if (tile) {
+          get().toggleSelectTile(tile.id, false)
+          return
+        }
+        set({ selection: null })
+        return
+      }
       const vertex = floor.vertices.find((v) => Math.hypot(v.x - x, v.y - y) <= 0.2)
       if (vertex) {
         set({ selection: { kind: 'vertex', id: vertex.id } })
@@ -2480,9 +3085,24 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         set({ selection: { kind: 'object', id: obj.id } })
         return
       }
+      const tile = hitFloorTile(floor, x, y)
+      if (tile) {
+        set({ selection: { kind: 'tile', id: tile.id } })
+        return
+      }
       const slab = hitSlabOpening(floor, x, y)
       if (slab) {
         set({ selection: { kind: 'slabOpening', id: slab.id } })
+        return
+      }
+      const cutout = hitVolumeCutout(floor, x, y)
+      if (cutout) {
+        set({ selection: { kind: 'volumeCutout', id: cutout.id } })
+        return
+      }
+      const box = hitVolumeBox(floor, x, y)
+      if (box) {
+        set({ selection: { kind: 'volumeBox', id: box.id } })
         return
       }
       const plate = hitFloorPlate(floor, x, y)
@@ -2514,6 +3134,11 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       const x1 = Math.max(minX, maxX)
       const y0 = Math.min(minY, maxY)
       const y1 = Math.max(minY, maxY)
+      if (get().workbench === 'tiling') {
+        const ids = hitFloorTilesInRect(floor, x0, y0, x1, y1).map((t) => t.id)
+        set({ selection: tileSelectionOf(ids), tileCutDraft: null })
+        return
+      }
       const vertexIds = floor.vertices
         .filter((v) => v.x >= x0 && v.x <= x1 && v.y >= y0 && v.y <= y1)
         .map((v) => v.id)
@@ -3205,8 +3830,18 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     },
 
     deleteSelection: () => {
-      const { selection } = get()
+      const { selection, workbench } = get()
       if (!selection) return
+      const wallLike =
+        selection.kind === 'wall' ||
+        selection.kind === 'vertex' ||
+        selection.kind === 'multi'
+      if (wallLike && workbench !== 'draft') {
+        set({
+          statusMessage: 'Стены удаляют только в режиме «Планировка».',
+        })
+        return
+      }
       get().pushHistory()
       let floor = get().activeFloor()
       if (selection.kind === 'opening') {
@@ -3226,6 +3861,15 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
           ...floor,
           plates: (floor.plates ?? []).filter((p) => p.id !== selection.id),
         }
+      } else if (selection.kind === 'volumeBox') {
+        floor = removeTilesForBox(floor, selection.id)
+        floor = removeVolumeBox(floor, selection.id)
+      } else if (selection.kind === 'tile') {
+        floor = removeTile(floor, selection.id)
+      } else if (selection.kind === 'tiles') {
+        floor = removeTiles(floor, selection.ids)
+      } else if (selection.kind === 'volumeCutout') {
+        floor = removeVolumeCutout(floor, selection.id)
       } else if (selection.kind === 'object') {
         floor = {
           ...floor,
@@ -3258,11 +3902,13 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         const next = removeMepNode(net.nodes, net.segments, selection.id)
         floor = { ...floor, cables: next }
       } else if (selection.kind === 'wall') {
+        floor = removeTilesForWall(floor, selection.id)
         floor = removeWall(floor, selection.id)
       } else if (selection.kind === 'vertex') {
         floor = removeVertex(floor, selection.id)
       } else if (selection.kind === 'multi') {
         for (const wid of selection.wallIds) {
+          floor = removeTilesForWall(floor, wid)
           floor = removeWall(floor, wid)
         }
         for (const vid of selection.vertexIds) {
@@ -3332,6 +3978,8 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         openingDraft: null,
         slabOpeningDraft: null,
         floorPlateDraft: null,
+    boxDraft: null,
+    cutoutDraft: null,
         statusMessage: 'Проект загружен',
       })
       return true
@@ -3360,6 +4008,8 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
           openingDraft: null,
           slabOpeningDraft: null,
           floorPlateDraft: null,
+    boxDraft: null,
+    cutoutDraft: null,
           statusMessage: pkg
             ? 'Проект и кеш объектов загружены'
             : 'Проект загружен',
