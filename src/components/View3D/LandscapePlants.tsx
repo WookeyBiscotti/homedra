@@ -49,6 +49,7 @@ function PlantInstance({
       <group
         ref={rootRef}
         frustumCulled={false}
+        userData={{ pickKind: 'plant', plantId: plant.id }}
         onPointerDown={(e: { stopPropagation: () => void; button: number }) => {
           if (e.button !== 0) return
           e.stopPropagation()

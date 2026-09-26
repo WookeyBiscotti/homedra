@@ -1105,6 +1105,7 @@ export function FloorPlanCanvas() {
                     },
                   },
                   floorFootprints,
+                  true,
                 )}
                 {label && (
                   <Text

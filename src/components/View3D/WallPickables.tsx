@@ -1,9 +1,10 @@
 import { Edges } from '@react-three/drei'
 import type { ThreeEvent } from '@react-three/fiber'
 import * as THREE from 'three'
-import { wallEndpoints } from '../../engine/geometry/openings'
+import { wallEndpoints, worldHitInWallOpening } from '../../engine/geometry/openings'
 import { isFloorRendered, isWallSelected, normalizeFloorVisibility } from '../../engine/types'
 import { useBuildingStore } from '../../store/buildingStore'
+import { useMemo } from 'react'
 
 const SELECTED = '#c45c26'
 
@@ -26,6 +27,27 @@ function WallPickMesh({
 }) {
   const setSelection = useBuildingStore((s) => s.setSelection)
   const setActiveFloor = useBuildingStore((s) => s.setActiveFloor)
+  const floor = useBuildingStore((s) =>
+    s.building.floors.find((f) => f.id === floorId),
+  )
+  const wall = floor?.walls.find((w) => w.id === wallId)
+
+  const raycast = useMemo(() => {
+    if (!floor || !wall) return undefined
+    return function wallPickRaycast(
+      this: THREE.Mesh,
+      raycaster: THREE.Raycaster,
+      intersects: THREE.Intersection[],
+    ) {
+      const before = intersects.length
+      THREE.Mesh.prototype.raycast.call(this, raycaster, intersects)
+      for (let i = intersects.length - 1; i >= before; i--) {
+        if (worldHitInWallOpening(floor, wall, intersects[i].point)) {
+          intersects.splice(i, 1)
+        }
+      }
+    }
+  }, [floor, wall])
 
   const ux = (ends.b.x - ends.a.x) / ends.len
   const uy = (ends.b.y - ends.a.y) / ends.len
@@ -44,6 +66,7 @@ function WallPickMesh({
     <mesh
       position={[cx, cy, cz]}
       rotation={[0, rotY, 0]}
+      raycast={raycast}
       onClick={onClick}
       onPointerOver={(e) => {
         e.stopPropagation()
@@ -52,7 +75,7 @@ function WallPickMesh({
       onPointerOut={() => {
         document.body.style.cursor = 'default'
       }}
-      userData={{ wallId }}
+      userData={{ wallId, pickKind: 'wall' }}
       renderOrder={1}
     >
       <boxGeometry args={[ends.len, height, thickness + 0.04]} />

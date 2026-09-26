@@ -70,9 +70,10 @@ function WallOpeningMesh({
       onPointerOut={() => {
         document.body.style.cursor = 'default'
       }}
+      userData={{ pickKind: 'opening', openingId: opening.id }}
     >
       <boxGeometry
-        args={[opening.width, opening.height, wallThickness + 0.06]}
+        args={[opening.width, opening.height, wallThickness + 0.1]}
       />
       <meshStandardMaterial
         color={color}
@@ -129,6 +130,7 @@ function SlabOpeningMesh({
       onPointerOut={() => {
         document.body.style.cursor = 'default'
       }}
+      userData={{ pickKind: 'slabOpening', openingId: opening.id }}
     >
       <boxGeometry args={[opening.width, thickness, opening.depth]} />
       <meshStandardMaterial

@@ -772,16 +772,17 @@ export function PropertiesPanel() {
         </section>
       )}
 
-      {isFurnish && !placedObject && (
+      {isFurnish && !placedObject && !opening && !slabOpening && (
         <p className="muted">
-          Выберите объект на плане или в 3D, либо поставьте новый из каталога.
+          Выберите объект, окно или проём на плане или в 3D, либо поставьте
+          новый из каталога.
         </p>
       )}
 
       {((!isGround && (isDraft || isPaint || isFurnish)) ||
         (isLandscape && placedObject)) && (
         <>
-      {isDraft && slabOpening && (
+      {(isDraft || isFurnish) && slabOpening && (
         <section className="prop-section">
           <h3>{slabOpeningKindLabel(slabOpening.kind)}</h3>
           <p className="muted">Прямоугольный вырез в плите пола</p>
@@ -923,7 +924,7 @@ export function PropertiesPanel() {
         </section>
       )}
 
-      {(isFurnish || isLandscape) && placedObject && (
+      {(isFurnish || isLandscape || isDraft) && placedObject && (
         <section className="prop-section">
           <h3>3D объект</h3>
           <p className="muted">
@@ -1097,7 +1098,7 @@ export function PropertiesPanel() {
         </section>
       )}
 
-      {isDraft && opening && (
+      {(isDraft || isFurnish) && opening && (
         <section className="prop-section">
           <h3>{openingKindLabel(opening.kind)}</h3>
           <label>
@@ -1643,13 +1644,14 @@ export function PropertiesPanel() {
         !opening &&
         !slabOpening &&
         !floorPlate &&
+        !placedObject &&
         !distancePair &&
         !pointsAlign &&
         !vertexDistancePair &&
         !pointOnWallPair && (
         <p className="muted">
-          Выберите стену, вершину, проём или пол. Инструмент «Пол» (B) — плита
-          без стен. Shift+клик — несколько.
+          Выберите стену, вершину, проём, объект или пол. Инструмент «Пол» (B) —
+          плита без стен. Shift+клик — несколько.
         </p>
       )}
         </>

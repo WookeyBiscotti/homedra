@@ -154,6 +154,32 @@ export function openingsForWall(floor: Floor, wallId: Id): Opening[] {
   return (floor.openings ?? []).filter((o) => o.wallId === wallId)
 }
 
+/**
+ * World-space hit on a wall volume that lands inside a door / window / passage.
+ * Used so wall pickables do not steal clicks from openings (and objects in them).
+ */
+export function worldHitInWallOpening(
+  floor: Floor,
+  wall: Wall,
+  world: { x: number; y: number; z: number },
+): boolean {
+  const ends = wallEndpoints(floor, wall)
+  if (!ends || ends.len < 1e-9) return false
+  const ux = (ends.b.x - ends.a.x) / ends.len
+  const uy = (ends.b.y - ends.a.y) / ends.len
+  const planX = world.x
+  const planY = -world.z
+  const along = (planX - ends.a.x) * ux + (planY - ends.a.y) * uy
+  const y = world.y - floor.elevation
+  for (const o of openingsForWall(floor, wall.id)) {
+    const span = openingSpan(o)
+    if (along < span.start - 1e-3 || along > span.end + 1e-3) continue
+    const top = o.sillHeight + o.height
+    if (y >= o.sillHeight - 1e-3 && y <= top + 1e-3) return true
+  }
+  return false
+}
+
 export function removeOpeningsForWall(floor: Floor, wallId: Id): Floor {
   return {
     ...floor,

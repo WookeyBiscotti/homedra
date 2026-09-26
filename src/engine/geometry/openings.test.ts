@@ -6,6 +6,7 @@ import {
   openingHeightBands,
   openingPlanRect,
   openingsActiveInBand,
+  worldHitInWallOpening,
 } from './openings'
 import { wallRegionsMinusOpenings } from '../extrude'
 import { createId, type Floor } from '../types'
@@ -142,5 +143,32 @@ describe('height bands and extrusion cut', () => {
     const above = wallRegionsMinusOpenings(floor, 2.1, 2.8)
     // Above door: no cutters → same as full union count
     expect(above.length).toBeGreaterThan(0)
+  })
+})
+
+describe('worldHitInWallOpening', () => {
+  it('detects a hit inside a window and ignores the solid wall beside it', () => {
+    const floor = rectFloor()
+    floor.openings = [
+      {
+        id: 'op1',
+        wallId: 'w1',
+        kind: 'window',
+        offset: 3,
+        width: 1.2,
+        height: 1.4,
+        sillHeight: 0.9,
+      },
+    ]
+    const wall = floor.walls[0]
+    expect(
+      worldHitInWallOpening(floor, wall, { x: 3, y: 1.6, z: 0 }),
+    ).toBe(true)
+    expect(
+      worldHitInWallOpening(floor, wall, { x: 0.4, y: 1.6, z: 0 }),
+    ).toBe(false)
+    expect(
+      worldHitInWallOpening(floor, wall, { x: 3, y: 0.2, z: 0 }),
+    ).toBe(false)
   })
 })

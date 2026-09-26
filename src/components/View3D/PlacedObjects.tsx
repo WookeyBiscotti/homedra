@@ -14,7 +14,6 @@ import {
 import * as THREE from 'three'
 import type { Floor, ModelRef, PlacedObject } from '../../engine/types'
 import { heightAt } from '../../landscape/terrain'
-import { snapToGrid } from '../../engine/geometry/walls'
 import { snapObjectXY, planHalfSizeOf } from '../../engine/geometry/objectSnap'
 import { resolveModelRef } from '../../models/resolveModel'
 import { cloneSceneSelection } from '../../models/sceneParts'
@@ -363,21 +362,13 @@ function GlbInstance({
     })
   }
 
-  const commitTransform = (applyObjectSnap: boolean) => {
+  const commitTransform = () => {
     const g = groupRef.current
     if (!g) return
-    let px = g.position.x
-    let py = -g.position.z
-    if (applyObjectSnap) {
-      const sn = snapPlanXY(px, py)
-      px = sn.snappedX ? sn.x : snapToGrid(sn.x)
-      py = sn.snappedY ? sn.y : snapToGrid(sn.y)
-    } else {
-      px = snapToGrid(px)
-      py = snapToGrid(py)
-    }
-    g.position.x = px
-    g.position.z = -py
+    // Persist the live pose as-is. Extra grid/object snap here used to
+    // nudge the object after the pointer was already released.
+    const px = g.position.x
+    const py = -g.position.z
     g.updateMatrixWorld(true)
     const box = new THREE.Box3().setFromObject(g)
     const planHalfX = box.isEmpty()
@@ -412,12 +403,31 @@ function GlbInstance({
     e.stopPropagation()
     onSelect()
 
-    const planeY = floorElevation + terrainLift + (obj.elevation ?? 0)
+    const g0 = groupRef.current
+    if (!g0) return
+
+    const planeY = g0.position.y
     const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -planeY)
     const hit = new THREE.Vector3()
     const raycaster = new THREE.Raycaster()
     const ndc = new THREE.Vector2()
     let moved = false
+
+    const projectPlan = (clientX: number, clientY: number) => {
+      const rect = gl.domElement.getBoundingClientRect()
+      ndc.set(
+        ((clientX - rect.left) / rect.width) * 2 - 1,
+        -((clientY - rect.top) / rect.height) * 2 + 1,
+      )
+      raycaster.setFromCamera(ndc, camera)
+      if (!raycaster.ray.intersectPlane(plane, hit)) return null
+      return { x: hit.x, y: -hit.z }
+    }
+
+    const grab0 = projectPlan(e.nativeEvent.clientX, e.nativeEvent.clientY)
+    const grabOffset = grab0
+      ? { x: g0.position.x - grab0.x, y: -g0.position.z - grab0.y }
+      : { x: 0, y: 0 }
 
     xyDragging.current = true
     setTransformDragging(true)
@@ -425,14 +435,9 @@ function GlbInstance({
     const onMove = (ev: PointerEvent) => {
       const g = groupRef.current
       if (!g) return
-      const rect = gl.domElement.getBoundingClientRect()
-      ndc.set(
-        ((ev.clientX - rect.left) / rect.width) * 2 - 1,
-        -((ev.clientY - rect.top) / rect.height) * 2 + 1,
-      )
-      raycaster.setFromCamera(ndc, camera)
-      if (!raycaster.ray.intersectPlane(plane, hit)) return
-      const sn = snapPlanXY(hit.x, -hit.z)
+      const p = projectPlan(ev.clientX, ev.clientY)
+      if (!p) return
+      const sn = snapPlanXY(p.x + grabOffset.x, p.y + grabOffset.y)
       g.position.x = sn.x
       g.position.z = -sn.y
       moved = true
@@ -440,14 +445,16 @@ function GlbInstance({
     }
 
     const onUp = () => {
-      xyDragging.current = false
-      setTransformDragging(false)
       gl.domElement.removeEventListener('pointermove', onMove)
       gl.domElement.removeEventListener('pointerup', onUp)
       gl.domElement.removeEventListener('pointercancel', onUp)
       xyDragCleanup.current = null
-      if (moved) commitTransform(true)
+      if (moved) commitTransform()
       else invalidate()
+      // Clear flags after persist so layout effects cannot write the
+      // pre-drag store pose back onto the mesh.
+      xyDragging.current = false
+      setTransformDragging(false)
     }
 
     xyDragCleanup.current?.()
@@ -461,6 +468,7 @@ function GlbInstance({
     <>
       <group
         ref={groupRef}
+        userData={{ pickKind: 'object', objectId: obj.id }}
         onClick={(e: ThreeEvent<MouseEvent>) => {
           e.stopPropagation()
           onSelect()
@@ -473,6 +481,18 @@ function GlbInstance({
         onPointerDown={startXyDrag}
       >
         <primitive object={scene} />
+        <mesh
+          position={[0, obj.sizeY / 2, 0]}
+          userData={{ pickKind: 'object', objectId: obj.id }}
+        >
+          <boxGeometry args={[obj.sizeX, obj.sizeY, obj.sizeZ]} />
+          <meshBasicMaterial
+            transparent
+            opacity={0}
+            depthWrite={false}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
       </group>
       {showGizmo && <SelectionAabb targetRef={groupRef} />}
       {showGizmo && (
@@ -484,8 +504,8 @@ function GlbInstance({
           space="world"
           onMouseDown={() => setTransformDragging(true)}
           onMouseUp={() => {
+            commitTransform()
             setTransformDragging(false)
-            commitTransform(gizmoMode === 'translate')
           }}
         />
       )}

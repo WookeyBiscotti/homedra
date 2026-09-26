@@ -146,19 +146,59 @@ function PostFx({
   )
 }
 
-/** While painting, only paintTarget meshes receive pointer hits. */
-function PaintEventFilter({ enabled }: { enabled: boolean }) {
+function pickKindOf(obj: THREE.Object3D): string | undefined {
+  let o: THREE.Object3D | null = obj
+  while (o) {
+    const kind = o.userData?.pickKind as string | undefined
+    if (kind) return kind
+    o = o.parent
+  }
+  return undefined
+}
+
+function pickPriority(kind: string | undefined): number {
+  switch (kind) {
+    case 'object':
+    case 'plant':
+      return 0
+    case 'opening':
+    case 'slabOpening':
+      return 1
+    case 'mep':
+      return 2
+    case 'wall':
+    case 'room':
+      return 3
+    default:
+      return 4
+  }
+}
+
+/** Paint: only paintTarget. Otherwise prefer objects/openings over wall volumes. */
+function PointerEventFilter({ painting }: { painting: boolean }) {
   const setEvents = useThree((s) => s.setEvents)
   useEffect(() => {
-    if (!enabled) {
-      setEvents({ filter: (hits) => hits })
-      return
+    if (painting) {
+      setEvents({
+        filter: (hits) => hits.filter((h) => h.object.userData?.paintTarget),
+      })
+    } else {
+      setEvents({
+        filter: (hits) => {
+          if (hits.length < 2) return hits
+          return [...hits].sort((a, b) => {
+            const pa = pickPriority(pickKindOf(a.object))
+            const pb = pickPriority(pickKindOf(b.object))
+            if (pa !== pb && Math.abs(a.distance - b.distance) < 0.4) {
+              return pa - pb
+            }
+            return a.distance - b.distance
+          })
+        },
+      })
     }
-    setEvents({
-      filter: (hits) => hits.filter((h) => h.object.userData?.paintTarget),
-    })
     return () => setEvents({ filter: (hits) => hits })
-  }, [enabled, setEvents])
+  }, [painting, setEvents])
   return null
 }
 
@@ -320,7 +360,7 @@ function WallFaceMesh({
               document.body.style.cursor = 'default'
             }
       }
-      userData={{ wallId, side }}
+      userData={{ wallId, side, pickKind: 'wall' }}
       renderOrder={3}
     >
       <PbrStandardMaterial
@@ -392,7 +432,7 @@ function WallCutMesh({
               document.body.style.cursor = 'default'
             }
       }
-      userData={{ wallId, paintKind: 'wall-cut' }}
+      userData={{ wallId, paintKind: 'wall-cut', pickKind: 'wall' }}
       renderOrder={3}
     >
       <PbrStandardMaterial
@@ -975,7 +1015,7 @@ function SceneContent({
   return (
     <>
       <ToneMappingSetup exposure={lighting.exposure} />
-      <PaintEventFilter enabled={painting} />
+      <PointerEventFilter painting={painting} />
       <color attach="background" args={[lighting.skyColor]} />
       <fog attach="fog" args={[lighting.skyColor, 40, 110]} />
 
