@@ -10,9 +10,10 @@ import {
   makeSplatTexture,
   writeSplatTexture,
 } from '../../landscape/splatMaterial'
+import { frameSizeX, frameSizeY } from '../../landscape/maps'
 import { applyHeightsToPositions, ensureTerrain, terrainFrame } from '../../landscape/terrain'
-import { loadPbrMaps } from '../../materials/ambientcg'
-import { applyTileRepeat } from '../../materials/ambientcg'
+import { HEX_SIZE_M } from '../../landscape/hexTiling'
+import { applyTileRepeat, loadPbrMaps, type LoadedPbrMaps } from '../../materials/ambientcg'
 import { materialCacheKey } from '../../materials/customTextures'
 import type { MaterialRef } from '../../engine/types'
 import { useBuildingStore } from '../../store/buildingStore'
@@ -22,7 +23,7 @@ function useSplatMaps(layers: Array<MaterialRef | null | undefined>) {
   const key = layers
     .map((l) => (l ? `${materialCacheKey(l)}:${l.tileSizeM}` : ''))
     .join('|')
-  const [maps, setMaps] = useState<Array<THREE.Texture | null>>([
+  const [maps, setMaps] = useState<Array<LoadedPbrMaps | null>>([
     null,
     null,
     null,
@@ -37,7 +38,7 @@ function useSplatMaps(layers: Array<MaterialRef | null | undefined>) {
         try {
           const m = await loadPbrMaps(l)
           applyTileRepeat(m, l.tileSizeM, 1, 1)
-          return m.map
+          return m
         } catch {
           return null
         }
@@ -52,6 +53,10 @@ function useSplatMaps(layers: Array<MaterialRef | null | undefined>) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key])
   return maps
+}
+
+function layerTint(hex: string | undefined): THREE.Color {
+  return new THREE.Color(hex ?? '#ffffff')
 }
 
 export function TerrainGround({
@@ -87,14 +92,17 @@ export function TerrainGround({
     [paint?.splatPng, paint?.resolution],
   )
 
+  const sizeX = frameSizeX(frame)
+  const sizeY = frameSizeY(frame)
+
   const geometry = useMemo(() => {
-    const geo = new THREE.PlaneGeometry(frame.size, frame.size, res - 1, res - 1)
+    const geo = new THREE.PlaneGeometry(sizeX, sizeY, res - 1, res - 1)
     geo.rotateX(-Math.PI / 2)
     applyHeightsToPositions(geo.attributes.position.array as Float32Array, heights, res, 0)
     geo.computeVertexNormals()
     geo.computeBoundingSphere()
     return geo
-  }, [frame.size, res, heights])
+  }, [sizeX, sizeY, res, heights])
 
   useEffect(() => () => geometry.dispose(), [geometry])
 
@@ -103,7 +111,7 @@ export function TerrainGround({
   const material = useMemo(() => {
     const mat = new THREE.MeshStandardMaterial({
       color: '#ffffff',
-      roughness: 0.95,
+      roughness: 1,
       metalness: 0,
       side: THREE.DoubleSide,
     })
@@ -132,25 +140,86 @@ export function TerrainGround({
   useEffect(() => {
     const u = splatUniforms
     const layers = paint?.layers ?? [null, null, null, null]
-    u.uL0.value = layerMaps[0] ?? emptySplatMap
-    u.uL1.value = layerMaps[1] ?? emptySplatMap
-    u.uL2.value = layerMaps[2] ?? emptySplatMap
-    u.uL3.value = layerMaps[3] ?? emptySplatMap
+    const albedo = [
+      layerMaps[0]?.map ?? emptySplatMap,
+      layerMaps[1]?.map ?? emptySplatMap,
+      layerMaps[2]?.map ?? emptySplatMap,
+      layerMaps[3]?.map ?? emptySplatMap,
+    ]
+    const normals = [
+      layerMaps[0]?.normalMap ?? emptySplatMap,
+      layerMaps[1]?.normalMap ?? emptySplatMap,
+      layerMaps[2]?.normalMap ?? emptySplatMap,
+      layerMaps[3]?.normalMap ?? emptySplatMap,
+    ]
+    const roughMaps = [
+      layerMaps[0]?.roughnessMap ?? emptySplatMap,
+      layerMaps[1]?.roughnessMap ?? emptySplatMap,
+      layerMaps[2]?.roughnessMap ?? emptySplatMap,
+      layerMaps[3]?.roughnessMap ?? emptySplatMap,
+    ]
+    u.uL0.value = albedo[0]
+    u.uL1.value = albedo[1]
+    u.uL2.value = albedo[2]
+    u.uL3.value = albedo[3]
+    u.uN0.value = normals[0]
+    u.uN1.value = normals[1]
+    u.uN2.value = normals[2]
+    u.uN3.value = normals[3]
+    u.uR0.value = roughMaps[0]
+    u.uR1.value = roughMaps[1]
+    u.uR2.value = roughMaps[2]
+    u.uR3.value = roughMaps[3]
     u.uHas.value.set(
       layerMaps[0] ? 1 : 0,
       layerMaps[1] ? 1 : 0,
       layerMaps[2] ? 1 : 0,
       layerMaps[3] ? 1 : 0,
     )
+    u.uHasN.value.set(
+      layerMaps[0]?.normalMap ? 1 : 0,
+      layerMaps[1]?.normalMap ? 1 : 0,
+      layerMaps[2]?.normalMap ? 1 : 0,
+      layerMaps[3]?.normalMap ? 1 : 0,
+    )
+    u.uHasR.value.set(
+      layerMaps[0]?.roughnessMap ? 1 : 0,
+      layerMaps[1]?.roughnessMap ? 1 : 0,
+      layerMaps[2]?.roughnessMap ? 1 : 0,
+      layerMaps[3]?.roughnessMap ? 1 : 0,
+    )
+    u.uTint0.value.copy(layerTint(layers[0]?.tint))
+    u.uTint1.value.copy(layerTint(layers[1]?.tint))
+    u.uTint2.value.copy(layerTint(layers[2]?.tint))
+    u.uTint3.value.copy(layerTint(layers[3]?.tint))
+    u.uRough.value.set(
+      layers[0]?.roughness ?? (layerMaps[0]?.roughnessMap ? 1 : 0.95),
+      layers[1]?.roughness ?? (layerMaps[1]?.roughnessMap ? 1 : 0.95),
+      layers[2]?.roughness ?? (layerMaps[2]?.roughnessMap ? 1 : 0.95),
+      layers[3]?.roughness ?? (layerMaps[3]?.roughnessMap ? 1 : 0.95),
+    )
+    u.uMetal.value.set(
+      layers[0]?.metalness ?? 0,
+      layers[1]?.metalness ?? 0,
+      layers[2]?.metalness ?? 0,
+      layers[3]?.metalness ?? 0,
+    )
+    u.uNScale.value.set(
+      layers[0]?.normalScale ?? 0.85,
+      layers[1]?.normalScale ?? 0.85,
+      layers[2]?.normalScale ?? 0.85,
+      layers[3]?.normalScale ?? 0.85,
+    )
     u.uOrigin.value.set(frame.originX, frame.originY)
-    u.uSize.value = frame.size
+    u.uSize.value.set(sizeX, sizeY)
+    u.uHexSize.value = HEX_SIZE_M
     u.uTile.value.set(
       1 / Math.max(0.4, layers[0]?.tileSizeM ?? 4),
       1 / Math.max(0.4, layers[1]?.tileSizeM ?? 4),
       1 / Math.max(0.4, layers[2]?.tileSizeM ?? 4),
       1 / Math.max(0.4, layers[3]?.tileSizeM ?? 4),
     )
-  }, [layerMaps, paint?.layers, frame.originX, frame.originY, frame.size, splatUniforms])
+  }, [layerMaps, paint?.layers, frame.originX, frame.originY, sizeX, sizeY, splatUniforms])
 
   const stroking = useRef(false)
   const flatten = useRef(0)

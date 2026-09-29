@@ -135,7 +135,7 @@ export function TileWorkbench() {
               type="button"
               className={`tool-btn ${tileSnapEnabled ? 'active' : ''}`}
               onClick={() => toggleTileSnap()}
-              title="Прилипание к соседним плиткам"
+              title="Прилипание к плиткам, стенам и полу"
             >
               <span className="tool-btn-main">
                 <span>Прилипание</span>
@@ -166,14 +166,14 @@ export function TileWorkbench() {
             />
           </label>
 
-          <div className="furnish-tools" role="group" aria-label="Рисунок заливки">
+          <div className="furnish-tools" role="group" aria-label="Способ заливки">
             <button
               type="button"
               className={`tool-btn ${tileFillPattern === 'straight' ? 'active' : ''}`}
               onClick={() => setTileFillPattern('straight')}
             >
               <span className="tool-btn-main">
-                <span>Прямо</span>
+                <span>Площадь</span>
               </span>
             </button>
             <button
@@ -183,6 +183,24 @@ export function TileWorkbench() {
             >
               <span className="tool-btn-main">
                 <span>Сдвиг 1/2</span>
+              </span>
+            </button>
+            <button
+              type="button"
+              className={`tool-btn ${tileFillPattern === 'horizontal' ? 'active' : ''}`}
+              onClick={() => setTileFillPattern('horizontal')}
+            >
+              <span className="tool-btn-main">
+                <span>Горизонталь</span>
+              </span>
+            </button>
+            <button
+              type="button"
+              className={`tool-btn ${tileFillPattern === 'vertical' ? 'active' : ''}`}
+              onClick={() => setTileFillPattern('vertical')}
+            >
+              <span className="tool-btn-main">
+                <span>Вертикаль</span>
               </span>
             </button>
           </div>
@@ -213,8 +231,11 @@ export function TileWorkbench() {
           )}
           {tool === 'fillTile' && pendingTile && (
             <p className="hint">
-              Клик по грани заливает пустые места сеткой и подрезает плитки у
-              стен и проёмов. Если плитки уже лежат, сетка к ним привяжется.
+              {tileFillPattern === 'horizontal'
+                ? 'Клик кладёт один горизонтальный ряд и подрезает плитки у стен и проёмов.'
+                : tileFillPattern === 'vertical'
+                  ? 'Клик кладёт один вертикальный ряд и подрезает плитки у стен и проёмов.'
+                  : 'Клик по грани заливает пустые места сеткой и подрезает плитки у стен и проёмов. Если плитки уже лежат, сетка к ним привяжется.'}
             </p>
           )}
           {tool === 'cutTile' && (

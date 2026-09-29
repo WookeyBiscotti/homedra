@@ -48,7 +48,7 @@ function obj(partial: Partial<PlacedObject> & Pick<PlacedObject, 'id' | 'x' | 'y
 const half = { x: 0.5, y: 0.5 }
 
 describe('snapObjectXY', () => {
-  it('snaps flush to wall finish cladding, not the solid core', () => {
+  it('snaps flush to the wall solid face, not the centerline', () => {
     const f = floor({
       vertices: [
         { id: 'a', x: 0, y: 0 },
@@ -56,10 +56,10 @@ describe('snapObjectXY', () => {
       ],
       walls: [{ id: 'w1', a: 'a', b: 'b', thickness: 0.2 }],
     })
-    // halfT 0.1 + finish 0.025 + support 0.5 = 0.625
+    // halfT 0.1 + support 0.5 = 0.6
     const sn = snapObjectXY(f, 2, 0.8, { halfSize: half })
     expect(sn.snappedY).toBe(true)
-    expect(sn.y).toBeCloseTo(0.625, 5)
+    expect(sn.y).toBeCloseTo(0.6, 5)
     expect(sn.x).toBeCloseTo(2, 5)
   })
 
@@ -78,8 +78,8 @@ describe('snapObjectXY', () => {
     const sn = snapObjectXY(f, 0.75, 0.75, { halfSize: half })
     expect(sn.snappedX).toBe(true)
     expect(sn.snappedY).toBe(true)
-    expect(sn.x).toBeCloseTo(0.625, 5)
-    expect(sn.y).toBeCloseTo(0.625, 5)
+    expect(sn.x).toBeCloseTo(0.6, 5)
+    expect(sn.y).toBeCloseTo(0.6, 5)
   })
 
   it('flushes AABB edge to another object without overlapping', () => {

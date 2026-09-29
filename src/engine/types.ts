@@ -6,6 +6,14 @@ export interface Vertex {
   y: number
 }
 
+/** Sub-rectangle of a material image (image space, top-left origin). */
+export type TileTexRegion = {
+  u0: number
+  v0: number
+  u1: number
+  v1: number
+}
+
 /** PBR / albedo material reference. Binary maps stay in cache / IndexedDB. */
 export interface MaterialRef {
   source: 'ambientcg' | 'polyhaven' | 'pixabay' | 'pexels' | 'custom'
@@ -19,6 +27,45 @@ export interface MaterialRef {
   url?: string
   /** Display name. */
   name?: string
+  /** Multiply tint on albedo (`#rrggbb`). */
+  tint?: string
+  /** 0…1 scalar (multiplies roughnessMap when present). */
+  roughness?: number
+  /** 0…1 scalar (multiplies metalnessMap when present). */
+  metalness?: number
+  /** Uniform normal map strength. */
+  normalScale?: number
+  aoMapIntensity?: number
+  envMapIntensity?: number
+  /**
+   * Sub-rectangle of the imported image used as the finish
+   * (image space, top-left origin). Full image when omitted.
+   */
+  texRegion?: TileTexRegion
+}
+
+const MATERIAL_LOOK_KEYS = [
+  'tint',
+  'roughness',
+  'metalness',
+  'normalScale',
+  'aoMapIntensity',
+  'envMapIntensity',
+  'displacementScale',
+] as const
+
+/** Keep tuned PBR sliders when the user swaps the texture image. */
+export function keepMaterialLook(
+  from: MaterialRef | null | undefined,
+  next: MaterialRef,
+): MaterialRef {
+  if (!from) return next
+  const out: MaterialRef = { ...next }
+  for (const key of MATERIAL_LOOK_KEYS) {
+    const value = from[key]
+    if (value !== undefined) (out as Record<string, unknown>)[key] = value
+  }
+  return out
 }
 
 /** Side of a wall relative to direction a→b and its left-hand normal. */
@@ -470,16 +517,22 @@ export interface LandscapePlant {
   shape?: Partial<PlantShape>
 }
 
-/** SeedThree grass.js: height 0.55–1.15, width 1.4–2.1, alphaTest 0.42. */
-export const SEEDTHREE_GRASS_DEFAULTS = {
+/**
+ * Meadow sliders in metres. Rendering uses the EZ-Tree demo tuft (`grass.glb`);
+ * alpha/roughness match src/app/grass.js.
+ */
+export const LANDSCAPE_GRASS_DEFAULTS = {
   density: 8,
   height: 0.85,
   width: 1.75,
   color: '#6fa83c',
   seed: 1,
-  alphaTest: 0.42,
-  roughness: 0.95,
+  alphaTest: 0.5,
+  roughness: 1,
 } as const
+
+/** @deprecated Prefer LANDSCAPE_GRASS_DEFAULTS — kept for older imports. */
+export const SEEDTHREE_GRASS_DEFAULTS = LANDSCAPE_GRASS_DEFAULTS
 
 export interface LandscapeGrassLayer {
   id: Id
@@ -502,7 +555,10 @@ export interface LandscapeTerrain {
   /** Int16 millimetres, little-endian, base64. 0 = ground.elevation. */
   heightPng?: string
   resolution: 128 | 256
+  /** Plot width (plan X), meters. Legacy square plots used this for both axes. */
   size: number
+  /** Plot depth (plan Y), meters. Defaults to `size`. */
+  sizeY?: number
   originX: number
   originY: number
 }
@@ -597,6 +653,31 @@ export interface PlacedObject {
   animationTime?: number
   /** Longest clip duration in seconds; set when the GLB is first resolved. */
   animationDuration?: number
+}
+
+/** World size in meters after instance scale (local bbox × scale). */
+export function placedObjectWorldSize(o: {
+  sizeX: number
+  sizeY: number
+  sizeZ: number
+  scaleX: number
+  scaleY: number
+  scaleZ: number
+}): { x: number; y: number; z: number } {
+  return {
+    x: Math.abs(o.sizeX * o.scaleX),
+    y: Math.abs(o.sizeY * o.scaleY),
+    z: Math.abs(o.sizeZ * o.scaleZ),
+  }
+}
+
+/** Instance scale that yields the requested world size on one axis. */
+export function scaleForWorldSize(world: number, native: number): number {
+  const n = Math.max(1e-6, Math.abs(native))
+  const w = Number.isFinite(world) ? Math.abs(world) : n
+  // Allow cm-authored GLBs (native ~10–100, scale ~0.01) — a 0.05 floor
+  // made a 0.8 m cabin jump to 4 m and blocked shrinking it back.
+  return Math.max(0.001, Math.min(20, w / n))
 }
 
 /** Plan AABB half-extents from local size × scale × yaw (estimate). */
@@ -699,15 +780,7 @@ export type TileSurface =
   | { type: 'wall'; wallId: Id; side: WallSide }
   | { type: 'box'; boxId: Id; face: BoxFace }
 
-export type TileFillPattern = 'straight' | 'offset'
-
-/** Sub-rectangle of the material image used as the tile face (image space, top-left origin). */
-export type TileTexRegion = {
-  u0: number
-  v0: number
-  u1: number
-  v1: number
-}
+export type TileFillPattern = 'straight' | 'offset' | 'horizontal' | 'vertical'
 
 export function defaultTileTexRegion(): TileTexRegion {
   return { u0: 0, v0: 0, u1: 1, v1: 1 }
@@ -1383,10 +1456,12 @@ export function normalizeLandscapeTerrain(
   if (!raw) return undefined
   const resolution = raw.resolution === 256 ? 256 : 128
   const size = Math.max(8, Number(raw.size) || 40)
+  const sizeY = Math.max(8, Number(raw.sizeY) || size)
   return {
     heightPng: typeof raw.heightPng === 'string' ? raw.heightPng : undefined,
     resolution,
     size,
+    sizeY,
     originX: Number(raw.originX) || 0,
     originY: Number(raw.originY) || 0,
   }
@@ -1433,7 +1508,7 @@ export function normalizeLandscapeGrass(
   raw?: LandscapeGrass | LegacyLandscapeGrass | null,
 ): LandscapeGrass | undefined {
   if (!raw) return undefined
-  const d = SEEDTHREE_GRASS_DEFAULTS
+  const d = LANDSCAPE_GRASS_DEFAULTS
   const color = (value?: string) =>
     typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value)
       ? value

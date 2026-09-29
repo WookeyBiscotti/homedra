@@ -122,32 +122,133 @@ function contourGeom(contour: TileContour): [number, number][][] {
   return [toRing(contour.outer), ...contour.holes.map(toRing)]
 }
 
-export function clipPolygonToContour(
+/** Inclusive pad so a tile sitting on a contour edge still intersects. */
+const CONTOUR_CLIP_PAD = 1e-4
+
+function inflateRing(poly: TilePoint[], pad: number): TilePoint[] {
+  const n = poly.length
+  if (n < 3 || Math.abs(pad) < 1e-12) return poly.map((p) => ({ ...p }))
+  let area = 0
+  for (let i = 0; i < n; i++) {
+    const p = poly[i]!
+    const q = poly[(i + 1) % n]!
+    area += p.x * q.y - q.x * p.y
+  }
+  const sign = area >= 0 ? 1 : -1
+  const out: TilePoint[] = []
+  for (let i = 0; i < n; i++) {
+    const prev = poly[(i + n - 1) % n]!
+    const cur = poly[i]!
+    const next = poly[(i + 1) % n]!
+    let dx1 = cur.x - prev.x
+    let dy1 = cur.y - prev.y
+    const len1 = Math.hypot(dx1, dy1) || 1
+    dx1 /= len1
+    dy1 /= len1
+    let dx2 = next.x - cur.x
+    let dy2 = next.y - cur.y
+    const len2 = Math.hypot(dx2, dy2) || 1
+    dx2 /= len2
+    dy2 /= len2
+    const ox1 = sign * dy1
+    const oy1 = sign * -dx1
+    const ox2 = sign * dy2
+    const oy2 = sign * -dx2
+    let ox = ox1 + ox2
+    let oy = oy1 + oy2
+    const ol = Math.hypot(ox, oy) || 1
+    out.push({ x: cur.x + (ox / ol) * pad, y: cur.y + (oy / ol) * pad })
+  }
+  return out
+}
+
+function pickClipPiece(
+  pieces: TilePoint[][],
+  hint?: TilePoint,
+): TilePoint[] | null {
+  const viable = pieces.filter((p) => polygonArea(p) >= MIN_TILE_AREA)
+  if (viable.length === 0) return null
+  if (hint) {
+    const hit = viable.find((p) => pointInPolygon(hint.x, hint.y, p))
+    if (hit) return hit
+    let best = viable[0]!
+    let bestD = Infinity
+    for (const p of viable) {
+      let x = 0
+      let y = 0
+      for (const q of p) {
+        x += q.x
+        y += q.y
+      }
+      const n = p.length || 1
+      const d = (x / n - hint.x) ** 2 + (y / n - hint.y) ** 2
+      if (d < bestD) {
+        bestD = d
+        best = p
+      }
+    }
+    return best
+  }
+  return viable.reduce((a, b) => (polygonArea(a) >= polygonArea(b) ? a : b))
+}
+
+function differencePieces(
+  pieces: TilePoint[][],
+  blockers: TilePoint[][],
+): TilePoint[][] {
+  if (pieces.length === 0 || blockers.length === 0) return pieces
+  const subject = pieces.map((p) => [toRing(p)])
+  const holes = blockers.filter((b) => b.length >= 3).map((b) => [toRing(b)])
+  if (holes.length === 0) return pieces
+  try {
+    const result = polygonClipping.difference(
+      subject,
+      ...holes,
+    ) as [number, number][][][]
+    return fromMulti(result)
+  } catch {
+    return pieces
+  }
+}
+
+function intersectContour(
   poly: TilePoint[],
   contour: TileContour,
-): TilePoint[] | null {
-  if (poly.length < 3 || contour.outer.length < 3) return null
+): TilePoint[][] {
+  if (poly.length < 3 || contour.outer.length < 3) return []
+  const padded: TileContour = {
+    outer: inflateRing(contour.outer, CONTOUR_CLIP_PAD),
+    holes: contour.holes.map((h) => inflateRing(h, -CONTOUR_CLIP_PAD)),
+  }
   try {
     const result = polygonClipping.intersection(
       [toRing(poly)],
-      contourGeom(contour),
+      contourGeom(padded),
     ) as [number, number][][][]
-    const pieces = fromMulti(result)
-    if (pieces.length === 0) return null
-    let best = pieces[0]
-    let bestA = polygonArea(best)
-    for (let i = 1; i < pieces.length; i++) {
-      const a = polygonArea(pieces[i])
-      if (a > bestA) {
-        best = pieces[i]
-        bestA = a
-      }
-    }
-    if (bestA < MIN_TILE_AREA) return null
-    return best
+    return fromMulti(result)
   } catch {
-    return null
+    return []
   }
+}
+
+export function clipPolygonToContour(
+  poly: TilePoint[],
+  contour: TileContour,
+  hint?: TilePoint,
+): TilePoint[] | null {
+  return pickClipPiece(intersectContour(poly, contour), hint)
+}
+
+/** Intersect `poly` with the surface, then subtract already laid tiles. */
+export function clipPolygonToFreeSpace(
+  poly: TilePoint[],
+  contour: TileContour | null,
+  blockers: TilePoint[][],
+  hint?: TilePoint,
+): TilePoint[] | null {
+  if (poly.length < 3) return null
+  const pieces = contour ? intersectContour(poly, contour) : [poly.map((p) => ({ ...p }))]
+  return pickClipPiece(differencePieces(pieces, blockers), hint)
 }
 
 export function polygonsOverlap(
@@ -175,6 +276,34 @@ export function excludedTileIds(opts?: {
   return ids
 }
 
+function tileRectsOverlap(
+  a: TileRect,
+  b: TileRect,
+  pad = 0,
+): boolean {
+  return !(
+    b.maxU + pad < a.minU ||
+    b.minU - pad > a.maxU ||
+    b.maxV + pad < a.minV ||
+    b.minV - pad > a.maxV
+  )
+}
+
+/** Neighbors whose unclipped AABB can still touch `tile` after grout inflate. */
+export function tilesNearFootprint(
+  tile: Pick<PlacedTile, 'u' | 'v' | 'width' | 'length' | 'rotation' | 'surface'>,
+  others: PlacedTile[],
+  pad = 0,
+): PlacedTile[] {
+  const rect = tileLocalRect(tile)
+  const out: PlacedTile[] = []
+  for (const other of others) {
+    if (!sameTileSurface(tile.surface, other.surface)) continue
+    if (tileRectsOverlap(rect, tileLocalRect(other), pad)) out.push(other)
+  }
+  return out
+}
+
 export function tileOverlapsOthers(
   tile: PlacedTile,
   others: PlacedTile[],
@@ -182,9 +311,9 @@ export function tileOverlapsOthers(
 ): boolean {
   const skip = new Set(Array.isArray(excludeId) ? excludeId : excludeId ? [excludeId] : [])
   const poly = tileLocalPolygon(tile)
-  for (const other of others) {
+  const nearby = tilesNearFootprint(tile, others)
+  for (const other of nearby) {
     if (skip.has(other.id)) continue
-    if (!sameTileSurface(tile.surface, other.surface)) continue
     if (polygonsOverlap(poly, tileLocalPolygon(other))) return true
   }
   return false
@@ -193,12 +322,26 @@ export function tileOverlapsOthers(
 export function applyTileClip(
   tile: PlacedTile,
   contour: TileContour | null,
+  opts?: {
+    blockers?: PlacedTile[]
+    groutM?: number
+    excludeIds?: string[]
+  },
 ): PlacedTile | null {
   const full = tileFullPolygon(tile)
-  if (!contour) {
+  const skip = new Set(opts?.excludeIds ?? [])
+  const grout = Math.max(0, opts?.groutM ?? tile.groutM ?? 0)
+  const nearby = tilesNearFootprint(tile, opts?.blockers ?? [], grout + 1e-3)
+  const blockerPolys = nearby
+    .filter((b) => !skip.has(b.id))
+    .map((b) => inflateRing(tileLocalPolygon(b), grout))
+  if (!contour && blockerPolys.length === 0) {
     return { ...tile, clip: undefined }
   }
-  const clipped = clipPolygonToContour(full, contour)
+  const clipped = clipPolygonToFreeSpace(full, contour, blockerPolys, {
+    x: tile.u,
+    y: tile.v,
+  })
   if (!clipped) return null
   const fullArea = polygonArea(full)
   const clippedArea = polygonArea(clipped)

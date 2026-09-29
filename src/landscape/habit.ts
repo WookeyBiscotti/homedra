@@ -81,6 +81,50 @@ export function habitRecipe(habit: PlantHabit): HabitRecipe {
         highCrown: false,
         barkRough: 0.5,
       }
+    case 'maple':
+      return {
+        bole: 0.22,
+        decurrent: true,
+        fork: true,
+        branchLen: 0.56,
+        twigLen: 0.34,
+        tipLift: 0.3,
+        droop: 0.04,
+        opposite: true,
+        rotate: Math.PI / 2,
+        leafAlong: 0.4,
+        fruit: false,
+        blossom: false,
+        segments: 3,
+        curve: 0.14,
+        curveBack: 0.08,
+        thin: 0.95,
+        flare: 0.38,
+        highCrown: false,
+        barkRough: 0.58,
+      }
+    case 'weeping':
+      return {
+        bole: 0.45,
+        decurrent: true,
+        fork: true,
+        branchLen: 0.78,
+        twigLen: 0.58,
+        tipLift: 0,
+        droop: 0.58,
+        opposite: false,
+        rotate: 2.39,
+        leafAlong: 0.94,
+        fruit: false,
+        blossom: true,
+        segments: 4,
+        curve: 0.34,
+        curveBack: 0.36,
+        thin: 0.88,
+        flare: 0.4,
+        highCrown: false,
+        barkRough: 0.62,
+      }
     case 'spruce':
       return {
         bole: 0.08,

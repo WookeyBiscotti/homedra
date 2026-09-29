@@ -21,6 +21,11 @@ import {
 } from '../../engine/types'
 import { heightAt } from '../../landscape/terrain'
 import { snapObjectXY, planHalfSizeOf } from '../../engine/geometry/objectSnap'
+import {
+  localGeometrySize,
+  measuredSizeLooksPlausible,
+  recoverExplodedInstance,
+} from '../../engine/geometry/modelSize'
 import { resolveModelRef } from '../../models/resolveModel'
 import { cloneSceneSelection } from '../../models/sceneParts'
 import {
@@ -93,35 +98,6 @@ function normalizeRoot(root: THREE.Object3D): void {
   root.position.y -= box.min.y
 }
 
-/**
- * Local model AABB (pre-instance scale/rotation).
- * Must not use setFromObject while the mesh sits under a scaled parent —
- * that would bake scale into sizeX and make planHalfSizeOf double-scale.
- */
-function measureLocalModelSize(
-  group: THREE.Object3D,
-  scene: THREE.Object3D,
-): { x: number; y: number; z: number } | null {
-  const pos = group.position.clone()
-  const rot = group.rotation.clone()
-  const scl = group.scale.clone()
-  group.position.set(0, 0, 0)
-  group.rotation.set(0, 0, 0)
-  group.scale.set(1, 1, 1)
-  group.updateMatrixWorld(true)
-  const box = new THREE.Box3().setFromObject(scene)
-  group.position.copy(pos)
-  group.rotation.copy(rot)
-  group.scale.copy(scl)
-  group.updateMatrixWorld(true)
-  if (box.isEmpty() || !Number.isFinite(box.min.x)) return null
-  return {
-    x: Math.max(0.05, box.max.x - box.min.x),
-    y: Math.max(0.05, box.max.y - box.min.y),
-    z: Math.max(0.05, box.max.z - box.min.z),
-  }
-}
-
 function modelResolveKey(model: ModelRef): string {
   switch (model.source) {
     case 'catalog':
@@ -181,6 +157,7 @@ function GlbInstance({
     (s) => s.cycleTransformGizmoMode,
   )
   const sceneMode = useBuildingStore((s) => s.sceneMode)
+  const workbench = useBuildingStore((s) => s.workbench)
   const pendingModel = useBuildingStore((s) => s.pendingModel)
   const objectSnapEnabled = useBuildingStore((s) => s.objectSnapEnabled)
   const xyDragCleanup = useRef<(() => void) | null>(null)
@@ -292,9 +269,18 @@ function GlbInstance({
     return () => forgetObjectMaterials(obj.id)
   }, [obj.id, scene])
 
+  const lockStoredScale = (group: THREE.Object3D) => {
+    group.scale.set(obj.scaleX, obj.scaleY, obj.scaleZ)
+  }
+
   useLayoutEffect(() => {
     if (!groupRef.current) return
-    if (useBuildingStore.getState().transformDragging || xyDragging.current) {
+    const dragging =
+      useBuildingStore.getState().transformDragging || xyDragging.current
+    if (dragging) {
+      // Translate/rotate must not keep a temporary scale=1 (R3F remount or
+      // TransformControls world-space decompose) on the instance.
+      if (gizmoMode !== 'scale') lockStoredScale(groupRef.current)
       return
     }
     applyPlacedTransform(groupRef.current, obj, floorElevation, terrainLift)
@@ -312,28 +298,52 @@ function GlbInstance({
     obj.scaleZ,
     floorElevation,
     terrainLift,
+    gizmoMode,
   ])
+
+  useFrame(() => {
+    const g = groupRef.current
+    if (!g) return
+    const st = useBuildingStore.getState()
+    const scaling = st.transformGizmoMode === 'scale' && st.transformDragging
+    if (scaling) return
+    if (
+      Math.abs(g.scale.x - obj.scaleX) > 1e-5 ||
+      Math.abs(g.scale.y - obj.scaleY) > 1e-5 ||
+      Math.abs(g.scale.z - obj.scaleZ) > 1e-5
+    ) {
+      lockStoredScale(g)
+    }
+  })
 
   // Local model size is independent of instance scale — measure once per mesh.
   useLayoutEffect(() => {
-    const g = groupRef.current
-    if (!g) return
-    const local = measureLocalModelSize(g, scene)
+    const local = localGeometrySize(scene)
     if (!local) return
-    if (
+    const recovered = recoverExplodedInstance(obj, local)
+    const sizeMatches =
       Math.abs(obj.sizeX - local.x) <= 0.03 &&
       Math.abs(obj.sizeY - local.y) <= 0.03 &&
       Math.abs(obj.sizeZ - local.z) <= 0.03
-    ) {
-      return
+    if (!recovered) {
+      if (!measuredSizeLooksPlausible(local) || sizeMatches) return
     }
     useBuildingStore.setState((st) => {
       const floor = st.activeFloor()
-      const objects = (floor.objects ?? []).map((o) =>
-        o.id === obj.id
-          ? { ...o, sizeX: local.x, sizeY: local.y, sizeZ: local.z }
-          : o,
-      )
+      const objects = (floor.objects ?? []).map((o) => {
+        if (o.id !== obj.id) return o
+        if (recovered) {
+          const half = estimatePlanHalf({
+            sizeX: recovered.sizeX,
+            sizeZ: recovered.sizeZ,
+            scaleX: recovered.scaleX,
+            scaleZ: recovered.scaleZ,
+            rotationY: o.rotationY,
+          })
+          return { ...o, ...recovered, planHalfX: half.x, planHalfY: half.y }
+        }
+        return { ...o, sizeX: local.x, sizeY: local.y, sizeZ: local.z }
+      })
       return {
         building: {
           ...st.building,
@@ -378,9 +388,10 @@ function GlbInstance({
     }
   }, [obj.id])
 
-  // Gizmo in any 3D orbit mode when object is selected (not visit / paint)
-  const showGizmo =
-    selected && sceneMode !== 'visit' && sceneMode !== 'paint'
+  // Gizmo / drag only in Objects workbench (not visit / paint)
+  const canEdit =
+    workbench === 'furnish' && sceneMode !== 'visit' && sceneMode !== 'paint'
+  const showGizmo = selected && canEdit
 
   const snapPlanXY = (x: number, y: number) => {
     if (!objectSnapEnabled) return { x, y, snappedX: false, snappedY: false }
@@ -389,8 +400,9 @@ function GlbInstance({
       ? estimatePlanHalf({
           sizeX: obj.sizeX,
           sizeZ: obj.sizeZ,
-          scaleX: g.scale.x,
-          scaleZ: g.scale.z,
+          // Store scale — live group.scale can be 1 during a translate.
+          scaleX: obj.scaleX,
+          scaleZ: obj.scaleZ,
           rotationY: g.rotation.y,
         })
       : planHalfSizeOf(obj)
@@ -406,35 +418,39 @@ function GlbInstance({
   const commitTransform = () => {
     const g = groupRef.current
     if (!g) return
-    // Persist the live pose as-is. Extra grid/object snap here used to
-    // nudge the object after the pointer was already released.
+    // Persist only what the current gizmo / body-drag actually edits.
+    // Writing scale from the live group after a translate used to bake a
+    // temporary measure-reset (scale=1) or a skinned AABB into the instance.
     const px = g.position.x
     const py = -g.position.z
-    g.updateMatrixWorld(true)
-    const box = new THREE.Box3().setFromObject(g)
-    const planHalfX = box.isEmpty()
-      ? undefined
-      : Math.max(0.05, (box.max.x - box.min.x) / 2)
-    const planHalfY = box.isEmpty()
-      ? undefined
-      : Math.max(0.05, (box.max.z - box.min.z) / 2)
-    if (planHalfX != null && planHalfY != null) {
-      setLivePlanHalf(obj.id, { x: planHalfX, y: planHalfY })
-    }
-    updatePlacedObject(obj.id, {
+    const patch: Partial<PlacedObject> = {
       x: px,
       y: py,
       elevation: g.position.y - floorElevation - terrainLift,
-      rotationX: g.rotation.x,
-      rotationY: g.rotation.y,
-      rotationZ: g.rotation.z,
-      scaleX: Math.max(0.01, g.scale.x),
-      scaleY: Math.max(0.01, g.scale.y),
-      scaleZ: Math.max(0.01, g.scale.z),
-      ...(planHalfX != null && planHalfY != null
-        ? { planHalfX, planHalfY }
-        : {}),
+    }
+    if (gizmoMode === 'rotate') {
+      patch.rotationX = g.rotation.x
+      patch.rotationY = g.rotation.y
+      patch.rotationZ = g.rotation.z
+    } else if (gizmoMode === 'scale') {
+      patch.scaleX = Math.max(0.001, g.scale.x)
+      patch.scaleY = Math.max(0.001, g.scale.y)
+      patch.scaleZ = Math.max(0.001, g.scale.z)
+    } else {
+      lockStoredScale(g)
+    }
+    const merged = { ...obj, ...patch }
+    const half = estimatePlanHalf({
+      sizeX: merged.sizeX,
+      sizeZ: merged.sizeZ,
+      scaleX: merged.scaleX,
+      scaleZ: merged.scaleZ,
+      rotationY: merged.rotationY,
     })
+    patch.planHalfX = half.x
+    patch.planHalfY = half.y
+    setLivePlanHalf(obj.id, half)
+    updatePlacedObject(obj.id, patch)
   }
 
   const cancelXyDrag = () => {
@@ -449,7 +465,7 @@ function GlbInstance({
   const startXyDrag = (e: ThreeEvent<PointerEvent>) => {
     if (e.button !== 0) return
     if (pendingModel) return
-    if (sceneMode === 'visit' || sceneMode === 'paint') return
+    if (!canEdit) return
     // Scale / rotate gizmos sit over the mesh. A body drag on the same
     // pointer would slide the object while the handle changes size.
     if (selected && gizmoMode !== 'translate') return
@@ -500,6 +516,7 @@ function GlbInstance({
       const sn = snapPlanXY(p.x + grabOffset.x, p.y + grabOffset.y)
       g.position.x = sn.x
       g.position.z = -sn.y
+      lockStoredScale(g)
       moved = true
       invalidate()
     }
@@ -528,18 +545,29 @@ function GlbInstance({
     <>
       <group
         ref={groupRef}
+        scale={[obj.scaleX, obj.scaleY, obj.scaleZ]}
         userData={{ pickKind: 'object', objectId: obj.id }}
-        onClick={(e: ThreeEvent<MouseEvent>) => {
-          e.stopPropagation()
-          onSelect()
-        }}
-        onDoubleClick={(e: ThreeEvent<MouseEvent>) => {
-          e.stopPropagation()
-          onSelect()
-          cycleTransformGizmoMode()
-        }}
+        onClick={
+          canEdit
+            ? (e: ThreeEvent<MouseEvent>) => {
+                e.stopPropagation()
+                onSelect()
+              }
+            : undefined
+        }
+        onDoubleClick={
+          canEdit
+            ? (e: ThreeEvent<MouseEvent>) => {
+                e.stopPropagation()
+                onSelect()
+                cycleTransformGizmoMode()
+              }
+            : undefined
+        }
         onPointerDown={
-          !selected || gizmoMode === 'translate' ? startXyDrag : undefined
+          canEdit && (!selected || gizmoMode === 'translate')
+            ? startXyDrag
+            : undefined
         }
       >
         <primitive object={scene} />
@@ -574,6 +602,11 @@ function GlbInstance({
           onMouseDown={() => {
             cancelXyDrag()
             setTransformDragging(true)
+          }}
+          onObjectChange={() => {
+            const g = groupRef.current
+            if (!g) return
+            if (gizmoMode !== 'scale') lockStoredScale(g)
           }}
           onMouseUp={() => {
             commitTransform()
@@ -613,6 +646,7 @@ function PlaceholderObject({
   terrainLift?: number
 }) {
   const selectObject = useBuildingStore((s) => s.selectObject)
+  const workbench = useBuildingStore((s) => s.workbench)
   return (
     <mesh
       position={[
@@ -620,10 +654,14 @@ function PlaceholderObject({
         floorElevation + terrainLift + (obj.elevation ?? 0) + 0.25,
         -obj.y,
       ]}
-      onClick={(e) => {
-        e.stopPropagation()
-        selectObject(floorId, obj.id)
-      }}
+      onClick={
+        workbench === 'furnish'
+          ? (e) => {
+              e.stopPropagation()
+              selectObject(floorId, obj.id)
+            }
+          : undefined
+      }
     >
       <boxGeometry args={[0.4, 0.5, 0.4]} />
       <meshStandardMaterial color="#8b3a2a" />

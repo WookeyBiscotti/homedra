@@ -6,6 +6,11 @@ import {
 } from './wallSolid'
 import { inflatePolygonOutward } from './wallFaces'
 import { floorPlateKey, floorPlateRect } from './floorPlates'
+import {
+  floorOpeningKey,
+  isFloorFlushOpening,
+  openingFloorPlanRect,
+} from './openings'
 
 export type FloorPaintRegion = {
   key: string
@@ -66,7 +71,7 @@ function pointInPoly(
 /**
  * Paintable floor regions: prefer detected rooms; also include wall-union
  * interior holes that didn't become rooms (so every enclosed floor area works),
- * plus free floor plates (no walls).
+ * free floor plates (no walls), and flush door/passage thresholds.
  */
 export function floorPaintRegions(floor: Floor): FloorPaintRegion[] {
   const rooms = detectRooms(floor)
@@ -106,6 +111,20 @@ export function floorPaintRegions(floor: Floor): FloorPaintRegion[] {
     if (covered(c.x, c.y)) continue
     out.push({
       key: floorPlateKey(plate.id),
+      polygon,
+      room: null,
+    })
+  }
+
+  // Door/passage strips sit inside the wall footprint — outside room polygons.
+  for (const opening of floor.openings ?? []) {
+    if (!isFloorFlushOpening(opening)) continue
+    const rect = openingFloorPlanRect(floor, opening)
+    if (!rect || rect.length < 3) continue
+    const polygon = orientPolygonCCW(rect)
+    if (Math.abs(signedArea(polygon)) < 1e-6) continue
+    out.push({
+      key: floorOpeningKey(opening.id),
       polygon,
       room: null,
     })

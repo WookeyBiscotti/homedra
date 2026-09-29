@@ -4,9 +4,20 @@ export const HEIGHT_LIMIT_M = 3
 export const HEIGHT_MM = 1000
 
 export type LandscapeFrame = {
+  /** X extent in meters. Legacy square plots only set this. */
   size: number
+  /** Y (plan) extent in meters. Defaults to `size`. */
+  sizeY?: number
   originX: number
   originY: number
+}
+
+export function frameSizeX(frame: LandscapeFrame): number {
+  return Math.max(1, frame.size)
+}
+
+export function frameSizeY(frame: LandscapeFrame): number {
+  return Math.max(1, frame.sizeY ?? frame.size)
 }
 
 export function bytesToBase64(bytes: Uint8Array): string {
@@ -82,10 +93,11 @@ export function planToUv(
   y: number,
   frame: LandscapeFrame,
 ): { u: number; v: number } {
-  const half = frame.size / 2
+  const sx = frameSizeX(frame)
+  const sy = frameSizeY(frame)
   return {
-    u: (x - frame.originX + half) / frame.size,
-    v: (y - frame.originY + half) / frame.size,
+    u: (x - frame.originX + sx / 2) / sx,
+    v: (y - frame.originY + sy / 2) / sy,
   }
 }
 
@@ -94,10 +106,11 @@ export function uvToPlan(
   v: number,
   frame: LandscapeFrame,
 ): { x: number; y: number } {
-  const half = frame.size / 2
+  const sx = frameSizeX(frame)
+  const sy = frameSizeY(frame)
   return {
-    x: frame.originX - half + u * frame.size,
-    y: frame.originY - half + v * frame.size,
+    x: frame.originX - sx / 2 + u * sx,
+    y: frame.originY - sy / 2 + v * sy,
   }
 }
 
@@ -106,8 +119,12 @@ export function sampleBilinear(
   res: number,
   u: number,
   v: number,
+  channels = 1,
+  channel = 0,
 ): number {
-  if (res <= 1) return data[0] ?? 0
+  const ch = Math.max(1, channels)
+  const c = Math.max(0, Math.min(ch - 1, channel))
+  if (res <= 1) return data[c] ?? 0
   const x = Math.max(0, Math.min(1, u)) * (res - 1)
   const y = Math.max(0, Math.min(1, v)) * (res - 1)
   const x0 = Math.floor(x)
@@ -116,11 +133,38 @@ export function sampleBilinear(
   const y1 = Math.min(res - 1, y0 + 1)
   const tx = x - x0
   const ty = y - y0
-  const a = data[y0 * res + x0] ?? 0
-  const b = data[y0 * res + x1] ?? 0
-  const c = data[y1 * res + x0] ?? 0
-  const d = data[y1 * res + x1] ?? 0
-  return a * (1 - tx) * (1 - ty) + b * tx * (1 - ty) + c * (1 - tx) * ty + d * tx * ty
+  const a = data[(y0 * res + x0) * ch + c] ?? 0
+  const b = data[(y0 * res + x1) * ch + c] ?? 0
+  const c1 = data[(y1 * res + x0) * ch + c] ?? 0
+  const d = data[(y1 * res + x1) * ch + c] ?? 0
+  return a * (1 - tx) * (1 - ty) + b * tx * (1 - ty) + c1 * (1 - tx) * ty + d * tx * ty
+}
+
+/** World-locked resample when the plot rectangle moves or grows. */
+export function resamplePlanGrid(
+  src: ArrayLike<number>,
+  srcRes: number,
+  srcFrame: LandscapeFrame,
+  dstRes: number,
+  dstFrame: LandscapeFrame,
+  channels = 1,
+): Float32Array {
+  const ch = Math.max(1, channels)
+  const out = new Float32Array(dstRes * dstRes * ch)
+  for (let j = 0; j < dstRes; j++) {
+    for (let i = 0; i < dstRes; i++) {
+      const u = dstRes <= 1 ? 0.5 : i / (dstRes - 1)
+      const v = dstRes <= 1 ? 0.5 : j / (dstRes - 1)
+      const p = uvToPlan(u, v, dstFrame)
+      const uv = planToUv(p.x, p.y, srcFrame)
+      if (uv.u < 0 || uv.u > 1 || uv.v < 0 || uv.v > 1) continue
+      const o = (j * dstRes + i) * ch
+      for (let c = 0; c < ch; c++) {
+        out[o + c] = sampleBilinear(src, srcRes, uv.u, uv.v, ch, c)
+      }
+    }
+  }
+  return out
 }
 
 export function brushWeight(
@@ -149,12 +193,14 @@ export function stampScalar(
   apply: (value: number, weight: number, i: number, j: number) => number,
   locked?: Uint8Array,
 ): void {
-  const half = frame.size / 2
-  const cell = frame.size / Math.max(1, res - 1)
-  const i0 = Math.max(0, Math.floor((cx - radius - (frame.originX - half)) / cell) - 1)
-  const i1 = Math.min(res - 1, Math.ceil((cx + radius - (frame.originX - half)) / cell) + 1)
-  const j0 = Math.max(0, Math.floor((cy - radius - (frame.originY - half)) / cell) - 1)
-  const j1 = Math.min(res - 1, Math.ceil((cy + radius - (frame.originY - half)) / cell) + 1)
+  const sx = frameSizeX(frame)
+  const sy = frameSizeY(frame)
+  const cellX = sx / Math.max(1, res - 1)
+  const cellY = sy / Math.max(1, res - 1)
+  const i0 = Math.max(0, Math.floor((cx - radius - (frame.originX - sx / 2)) / cellX) - 1)
+  const i1 = Math.min(res - 1, Math.ceil((cx + radius - (frame.originX - sx / 2)) / cellX) + 1)
+  const j0 = Math.max(0, Math.floor((cy - radius - (frame.originY - sy / 2)) / cellY) - 1)
+  const j1 = Math.min(res - 1, Math.ceil((cy + radius - (frame.originY - sy / 2)) / cellY) + 1)
   for (let j = j0; j <= j1; j++) {
     for (let i = i0; i <= i1; i++) {
       const idx = j * res + i

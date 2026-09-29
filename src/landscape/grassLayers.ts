@@ -1,6 +1,6 @@
 import {
   createId,
-  SEEDTHREE_GRASS_DEFAULTS,
+  LANDSCAPE_GRASS_DEFAULTS,
   type LandscapeGrass,
   type LandscapeGrassLayer,
 } from '../engine/types'
@@ -12,10 +12,10 @@ export const GRASS_TYPE_PRESETS: Array<
 > = [
   {
     name: 'Луг',
-    density: SEEDTHREE_GRASS_DEFAULTS.density,
-    height: SEEDTHREE_GRASS_DEFAULTS.height,
-    width: SEEDTHREE_GRASS_DEFAULTS.width,
-    color: SEEDTHREE_GRASS_DEFAULTS.color,
+    density: LANDSCAPE_GRASS_DEFAULTS.density,
+    height: LANDSCAPE_GRASS_DEFAULTS.height,
+    width: LANDSCAPE_GRASS_DEFAULTS.width,
+    color: LANDSCAPE_GRASS_DEFAULTS.color,
   },
   { name: 'Газон', density: 12, height: 0.35, width: 1.2, color: '#4f9d32' },
   { name: 'Сухая', density: 5, height: 1.15, width: 2.1, color: '#c4a24a' },
@@ -27,7 +27,7 @@ export const GRASS_TYPE_PRESETS: Array<
 function clampColor(raw?: string): string {
   return typeof raw === 'string' && /^#[0-9a-fA-F]{6}$/.test(raw)
     ? raw
-    : SEEDTHREE_GRASS_DEFAULTS.color
+    : LANDSCAPE_GRASS_DEFAULTS.color
 }
 
 export function createGrassLayer(

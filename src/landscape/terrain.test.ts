@@ -203,7 +203,7 @@ describe('grass layout', () => {
     expect(tufts.length).toBeGreaterThan(30)
   })
 
-  it('scales tuft width from SeedThree spread', () => {
+  it('scales tuft width from meadow spread', () => {
     const coverage = new Uint8Array(8 * 8)
     coverage.fill(255)
     const narrow = layoutGrass({
@@ -327,6 +327,13 @@ describe('plant shape', () => {
     expect(pine.highCrown).toBe(true)
     expect(thuja.bole).toBeLessThan(0.1)
     expect(thuja.opposite).toBe(true)
+    const maple = habitRecipe('maple')
+    const weeping = habitRecipe('weeping')
+    expect(maple.opposite).toBe(true)
+    expect(weeping.droop).toBeGreaterThan(cherry.droop)
+    expect(weeping.droop).toBeGreaterThan(0.5)
+    expect(weeping.leafAlong).toBeGreaterThan(0.85)
+    expect(weeping.bole).toBeGreaterThan(0.4)
   })
 
   it('gives each garden species its own crown defaults', () => {
@@ -355,6 +362,7 @@ describe('species', () => {
       'ezPineLarge',
       'ezYew',
       'ezJuniper',
+      'leylandGoldRider',
       'ezOakSmall',
       'ezOak',
       'ezOakLarge',
@@ -364,11 +372,18 @@ describe('species', () => {
       'ezAspenSmall',
       'ezAspen',
       'ezAspenLarge',
+      'sorbusCommixta',
+      'arcticJadeMaple',
+      'pyrusPendula',
       'cultivatedApple',
+      'niedzwetzkyApple',
       'sweetCherry',
       'ezBush1',
       'ezBush2',
       'ezBush3',
+      'cornusAlba',
+      'spireaGrefsheim',
+      'physocarpusLadyInRed',
       'ezTrellis',
       'gardenRose',
       'gardenTulip',
@@ -384,6 +399,17 @@ describe('species', () => {
     expect(speciesByKey('ezYew').eztreePreset).toBe('Pine Small')
     expect(speciesByKey('ezJuniper').eztreePreset).toBe('Bush 3')
     expect(speciesByKey('gardenRose').kind).toBe('flower')
+    expect(speciesByKey('niedzwetzkyApple').name).toBe('Яблоня декоративная Недзвецкого')
+    expect(speciesByKey('cornusAlba').latin).toBe('Cornus alba')
+    expect(speciesByKey('spireaGrefsheim').name).toBe('Спирея серая Грефшейм v2 Lav')
+    expect(speciesByKey('leylandGoldRider').eztreeTune?.leafTint).toBe(0xe0d050)
+    expect(speciesByKey('sorbusCommixta').latin).toBe('Sorbus commixta')
+    expect(speciesByKey('arcticJadeMaple').leafKind).toBe('maple')
+    expect(speciesByKey('pyrusPendula').habit).toBe('weeping')
+    expect(speciesByKey('pyrusPendula').leafKind).toBe('lance')
+    expect(defaultPlantShape('pyrusPendula').leafSize).toBeGreaterThan(0.45)
+    expect(defaultPlantShape('pyrusPendula').leavesPerBranch).toBeGreaterThan(14)
+    expect(speciesByKey('physocarpusLadyInRed').group).toBe('shrub')
   })
 })
 
@@ -425,13 +451,27 @@ describe('splat shader bind', () => {
     const shader = {
       uniforms: {} as Record<string, unknown>,
       vertexShader: '#include <common>\n#include <begin_vertex>',
-      fragmentShader: '#include <common>\n#include <map_fragment>\n#include <color_fragment>',
+      fragmentShader: [
+        '#include <common>',
+        '#include <map_fragment>',
+        '#include <color_fragment>',
+        '#include <roughnessmap_fragment>',
+        '#include <metalnessmap_fragment>',
+        '#include <normal_fragment_maps>',
+      ].join('\n'),
     }
     mat.onBeforeCompile(shader as never, null as never)
     expect(shader.fragmentShader).toContain('uSplat')
     expect(shader.fragmentShader).toContain('vSplatWorld')
+    expect(shader.fragmentShader).toContain('hexSample')
+    expect(shader.fragmentShader).toContain('uN0')
+    expect(shader.fragmentShader).toContain('uR0')
+    expect(shader.fragmentShader).toContain('uHexSize')
     expect(shader.vertexShader).toContain('vSplatWorld')
     expect(shader.uniforms).toHaveProperty('uSplat')
+    expect(shader.uniforms).toHaveProperty('uN0')
+    expect(shader.fragmentShader).toContain('#include <map_fragment>')
+    expect(shader.fragmentShader.split('diffuseColor.rgb = splatAlbedo').length - 1).toBe(1)
   })
 })
 

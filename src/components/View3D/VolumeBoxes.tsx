@@ -151,6 +151,7 @@ function VolumeBoxMesh({
           opacity={dimmed ? 0.4 : 1}
           side={THREE.DoubleSide}
           meterUvs
+          vertexDisplacement={false}
         />
       ) : (
         <meshStandardMaterial
@@ -240,6 +241,7 @@ function VolumeCutoutMesh({
           polygonOffset
           polygonOffsetFactor={-1}
           polygonOffsetUnits={-1}
+          vertexDisplacement={false}
         />
       ) : (
         <meshStandardMaterial
@@ -310,7 +312,6 @@ export function PaintVolumeBox({
   boxId: string
   hasFinish: boolean
 }) {
-  const paintBrush = useBuildingStore((s) => s.paintBrush)
   const setVolumeBoxMaterial = useBuildingStore((s) => s.setVolumeBoxMaterial)
   const setSelection = useBuildingStore((s) => s.setSelection)
   const setActiveFloor = useBuildingStore((s) => s.setActiveFloor)
@@ -340,12 +341,14 @@ export function PaintVolumeBox({
         e.stopPropagation()
         setActiveFloor(floor.id)
         setSelection({ kind: 'volumeBox', id: box.id })
-        if (!paintBrush && !e.altKey) return
-        setVolumeBoxMaterial(box.id, e.altKey ? null : paintBrush)
+        const brush = useBuildingStore.getState().paintBrush
+        if (!brush && !e.altKey) return
+        setVolumeBoxMaterial(box.id, e.altKey ? null : brush)
       }}
       onPointerOver={(e) => {
         e.stopPropagation()
-        document.body.style.cursor = paintBrush || e.altKey ? 'crosshair' : 'pointer'
+        const brush = useBuildingStore.getState().paintBrush
+        document.body.style.cursor = brush || e.altKey ? 'crosshair' : 'pointer'
       }}
       onPointerOut={() => {
         document.body.style.cursor = 'default'
@@ -373,7 +376,6 @@ export function PaintVolumeCutout({
   cutId: string
   hasFinish: boolean
 }) {
-  const paintBrush = useBuildingStore((s) => s.paintBrush)
   const setVolumeCutoutMaterial = useBuildingStore(
     (s) => s.setVolumeCutoutMaterial,
   )
@@ -401,12 +403,14 @@ export function PaintVolumeCutout({
         e.stopPropagation()
         setActiveFloor(floor.id)
         setSelection({ kind: 'volumeCutout', id: cut.id })
-        if (!paintBrush && !e.altKey) return
-        setVolumeCutoutMaterial(cut.id, e.altKey ? null : paintBrush)
+        const brush = useBuildingStore.getState().paintBrush
+        if (!brush && !e.altKey) return
+        setVolumeCutoutMaterial(cut.id, e.altKey ? null : brush)
       }}
       onPointerOver={(e) => {
         e.stopPropagation()
-        document.body.style.cursor = paintBrush || e.altKey ? 'crosshair' : 'pointer'
+        const brush = useBuildingStore.getState().paintBrush
+        document.body.style.cursor = brush || e.altKey ? 'crosshair' : 'pointer'
       }}
       onPointerOut={() => {
         document.body.style.cursor = 'default'

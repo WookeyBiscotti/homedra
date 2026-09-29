@@ -7,7 +7,9 @@ The live app uses a WebGL-safe adapter in `src/landscape/seedthree.ts`:
 
 - Species roster matches SeedThree (`src/landscape/species.ts`)
 - Trees are generated with a Weber–Penn-lite / dichotomous stand-in
-- Grass tufts follow `src/core/grass.js` (crossed quads, instancing)
+  (or EZ-Tree presets via `src/landscape/eztree.ts`)
+- Meadow grass uses the EZ-Tree demo tuft (`public/models/landscape/grass.glb`
+  + `src/landscape/ezGrass.ts`), not SeedThree crossed quads
 
 Upstream `generate()` / `createTree()` target `three/webgpu` + TSL and cannot
 drop into this project's R3F WebGL canvas (N8AO / SMAA / paint).

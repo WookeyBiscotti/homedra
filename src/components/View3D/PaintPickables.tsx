@@ -7,16 +7,13 @@ import {
   hitFloorPaintRegion,
 } from '../../engine/geometry/floorPaint'
 import { resolveFloorRegionMaterial } from '../../engine/geometry/floorPlates'
+import { floorOpeningIdFromKey } from '../../engine/geometry/openings'
 import { floorSlabOpeningHoles } from '../../engine/geometry/slabOpenings'
 import {
   buildRoomFloorGeometry,
-  buildWallPaintHitGeometry,
   wallFaceHitInOpening,
 } from '../../engine/geometry/wallFaces'
-import {
-  buildSlabOpeningCutGeometry,
-  buildWallCutPaintHitGeometry,
-} from '../../engine/geometry/wallCuts'
+import { buildSlabOpeningCutGeometry } from '../../engine/geometry/wallCuts'
 import {
   isStoryFloor,
   type Floor,
@@ -36,7 +33,7 @@ export function disableRaycast() {}
 /**
  * Raycast a wall face; drop opening hits and hits near the floor plane.
  */
-function makeWallPaintRaycast(floor: Floor, wall: Wall, side: WallSide) {
+export function makeWallPaintRaycast(floor: Floor, wall: Wall, side: WallSide) {
   return function wallPaintRaycast(
     this: THREE.Mesh,
     raycaster: THREE.Raycaster,
@@ -63,81 +60,6 @@ function makeWallPaintRaycast(floor: Floor, wall: Wall, side: WallSide) {
   }
 }
 
-function PaintWallFace({
-  floorId,
-  wall,
-  side,
-  floor,
-  hasFinish,
-}: {
-  floorId: string
-  wall: Wall
-  side: WallSide
-  floor: Floor
-  hasFinish: boolean
-}) {
-  const paintBrush = useBuildingStore((s) => s.paintBrush)
-  const setWallSideMaterial = useBuildingStore((s) => s.setWallSideMaterial)
-  const setSelection = useBuildingStore((s) => s.setSelection)
-  const setActiveFloor = useBuildingStore((s) => s.setActiveFloor)
-  const [hovered, setHovered] = useState(false)
-
-  const geometry = useMemo(
-    () => buildWallPaintHitGeometry(floor, wall, side),
-    [floor, wall, side],
-  )
-
-  const raycast = useMemo(
-    () => makeWallPaintRaycast(floor, wall, side),
-    [floor, wall, side],
-  )
-
-  useEffect(() => {
-    return () => {
-      geometry?.dispose()
-    }
-  }, [geometry])
-
-  if (!geometry) return null
-
-  return (
-    <mesh
-      geometry={geometry}
-      raycast={raycast}
-      onClick={(e: ThreeEvent<MouseEvent>) => {
-        e.stopPropagation()
-        setActiveFloor(floorId)
-        setSelection({ kind: 'wall', id: wall.id })
-        if (!paintBrush && !e.altKey) return
-        setWallSideMaterial(wall.id, side, e.altKey ? null : paintBrush)
-      }}
-      onPointerOver={(e) => {
-        e.stopPropagation()
-        setHovered(true)
-        document.body.style.cursor = paintBrush || e.altKey ? 'crosshair' : 'pointer'
-      }}
-      onPointerOut={() => {
-        setHovered(false)
-        document.body.style.cursor = 'default'
-      }}
-      userData={{ wallId: wall.id, side, paintTarget: true, paintKind: 'wall' }}
-      renderOrder={10}
-    >
-      <meshBasicMaterial
-        transparent
-        opacity={hasFinish ? (hovered ? 0.14 : 0) : hovered ? 0.3 : 0.14}
-        color={hovered ? HOVER : '#d4c4a8'}
-        depthWrite={false}
-        side={THREE.FrontSide}
-        polygonOffset
-        polygonOffsetFactor={-4}
-        polygonOffsetUnits={-4}
-      />
-      {hovered && <Edges threshold={15} color={HOVER} scale={1.002} />}
-    </mesh>
-  )
-}
-
 function PaintFloorRegion({
   floorId,
   regionKey,
@@ -149,7 +71,6 @@ function PaintFloorRegion({
   geometry: THREE.BufferGeometry
   hasFinish: boolean
 }) {
-  const paintBrush = useBuildingStore((s) => s.paintBrush)
   const setRoomFloorMaterial = useBuildingStore((s) => s.setRoomFloorMaterial)
   const setRoomWallsMaterial = useBuildingStore((s) => s.setRoomWallsMaterial)
   const setSelection = useBuildingStore((s) => s.setSelection)
@@ -170,17 +91,26 @@ function PaintFloorRegion({
         } else {
           setSelection({ kind: 'room', key: regionKey })
         }
-        if (!paintBrush && !e.altKey) return
-        const next = e.altKey ? null : paintBrush
+        const brush = useBuildingStore.getState().paintBrush
+        if (!brush && !e.altKey) return
+        const next = e.altKey ? null : brush
         setRoomFloorMaterial(regionKey, next)
-        if (e.shiftKey && !e.altKey && paintBrush) {
-          setRoomWallsMaterial(regionKey, paintBrush)
+        // Shift paints room walls; opening/plate thresholds have no wall contour
+        if (
+          e.shiftKey &&
+          !e.altKey &&
+          brush &&
+          !plateId &&
+          !floorOpeningIdFromKey(regionKey)
+        ) {
+          setRoomWallsMaterial(regionKey, brush)
         }
       }}
       onPointerOver={(e) => {
         e.stopPropagation()
         setHovered(true)
-        document.body.style.cursor = paintBrush || e.altKey ? 'crosshair' : 'pointer'
+        const brush = useBuildingStore.getState().paintBrush
+        document.body.style.cursor = brush || e.altKey ? 'crosshair' : 'pointer'
       }}
       onPointerOut={() => {
         setHovered(false)
@@ -204,73 +134,6 @@ function PaintFloorRegion({
   )
 }
 
-function PaintWallCut({
-  floorId,
-  wall,
-  floor,
-  hasFinish,
-}: {
-  floorId: string
-  wall: Wall
-  floor: Floor
-  hasFinish: boolean
-}) {
-  const paintBrush = useBuildingStore((s) => s.paintBrush)
-  const setWallCutMaterial = useBuildingStore((s) => s.setWallCutMaterial)
-  const setSelection = useBuildingStore((s) => s.setSelection)
-  const setActiveFloor = useBuildingStore((s) => s.setActiveFloor)
-  const [hovered, setHovered] = useState(false)
-
-  const geometry = useMemo(
-    () => buildWallCutPaintHitGeometry(floor, wall),
-    [floor, wall],
-  )
-
-  useEffect(() => {
-    return () => {
-      geometry?.dispose()
-    }
-  }, [geometry])
-
-  if (!geometry) return null
-
-  return (
-    <mesh
-      geometry={geometry}
-      onClick={(e: ThreeEvent<MouseEvent>) => {
-        e.stopPropagation()
-        setActiveFloor(floorId)
-        setSelection({ kind: 'wall', id: wall.id })
-        if (!paintBrush && !e.altKey) return
-        setWallCutMaterial(wall.id, e.altKey ? null : paintBrush)
-      }}
-      onPointerOver={(e) => {
-        e.stopPropagation()
-        setHovered(true)
-        document.body.style.cursor = paintBrush || e.altKey ? 'crosshair' : 'pointer'
-      }}
-      onPointerOut={() => {
-        setHovered(false)
-        document.body.style.cursor = 'default'
-      }}
-      userData={{ wallId: wall.id, paintTarget: true, paintKind: 'wall-cut' }}
-      renderOrder={11}
-    >
-      <meshBasicMaterial
-        transparent
-        opacity={hasFinish ? (hovered ? 0.14 : 0) : hovered ? 0.3 : 0.14}
-        color={hovered ? HOVER : '#d4c4a8'}
-        depthWrite={false}
-        side={THREE.FrontSide}
-        polygonOffset
-        polygonOffsetFactor={-4}
-        polygonOffsetUnits={-4}
-      />
-      {hovered && <Edges threshold={15} color={HOVER} scale={1.002} />}
-    </mesh>
-  )
-}
-
 function PaintSlabCut({
   floorId,
   opening,
@@ -282,7 +145,6 @@ function PaintSlabCut({
   floor: Floor
   hasFinish: boolean
 }) {
-  const paintBrush = useBuildingStore((s) => s.paintBrush)
   const setSlabOpeningMaterial = useBuildingStore(
     (s) => s.setSlabOpeningMaterial,
   )
@@ -310,13 +172,15 @@ function PaintSlabCut({
         e.stopPropagation()
         setActiveFloor(floorId)
         setSelection({ kind: 'slabOpening', id: opening.id })
-        if (!paintBrush && !e.altKey) return
-        setSlabOpeningMaterial(opening.id, e.altKey ? null : paintBrush)
+        const brush = useBuildingStore.getState().paintBrush
+        if (!brush && !e.altKey) return
+        setSlabOpeningMaterial(opening.id, e.altKey ? null : brush)
       }}
       onPointerOver={(e) => {
         e.stopPropagation()
         setHovered(true)
-        document.body.style.cursor = paintBrush || e.altKey ? 'crosshair' : 'pointer'
+        const brush = useBuildingStore.getState().paintBrush
+        document.body.style.cursor = brush || e.altKey ? 'crosshair' : 'pointer'
       }}
       onPointerOut={() => {
         setHovered(false)
@@ -345,43 +209,13 @@ function PaintSlabCut({
 }
 
 /**
- * Paint hit targets: wall side planes + cut faces + one mesh per enclosed floor region
- * (rooms + wall-union holes that weren't detected as rooms).
+ * Paint hit targets for floors, slab wells and volume boxes.
+ * Wall sides / cuts are painted on the wall solid itself.
  */
 export function PaintPickables({ floorId }: { floorId: string }) {
   const floor = useBuildingStore((s) =>
     s.building.floors.find((f) => f.id === floorId),
   )
-
-  const wallItems = useMemo(() => {
-    if (!floor || !isStoryFloor(floor)) return []
-    const items: Array<{
-      key: string
-      wall: Wall
-      side: WallSide
-      hasFinish: boolean
-    }> = []
-    for (const wall of floor.walls) {
-      for (const side of ['pos', 'neg'] as WallSide[]) {
-        items.push({
-          key: `${wall.id}-${side}`,
-          wall,
-          side,
-          hasFinish: !!wall.materials?.[side],
-        })
-      }
-    }
-    return items
-  }, [floor])
-
-  const wallCutItems = useMemo(() => {
-    if (!floor || !isStoryFloor(floor)) return []
-    return floor.walls.map((wall) => ({
-      key: `${wall.id}-cut`,
-      wall,
-      hasFinish: !!wall.materials?.cut,
-    }))
-  }, [floor])
 
   const slabCutItems = useMemo(() => {
     if (!floor || !isStoryFloor(floor)) return []
@@ -402,10 +236,12 @@ export function PaintPickables({ floorId }: { floorId: string }) {
       hasFinish: boolean
     }> = []
     for (const r of regions) {
-      // Slight inflate so the strip against walls is still hittable
+      const isOpening = !!floorOpeningIdFromKey(r.key)
+      // Room floors inflate toward walls; opening strips stay exact so they
+      // don't steal hits from adjacent rooms (and sit slightly above).
       const geo = buildRoomFloorGeometry(r.polygon, floor.elevation, {
-        yOffset: 0.03,
-        inflateM: 0.12,
+        yOffset: isOpening ? 0.035 : 0.03,
+        inflateM: isOpening ? 0 : 0.12,
         holes,
       })
       if (!geo) continue
@@ -434,25 +270,6 @@ export function PaintPickables({ floorId }: { floorId: string }) {
           floorId={floorId}
           regionKey={item.key}
           geometry={item.geo}
-          hasFinish={item.hasFinish}
-        />
-      ))}
-      {wallItems.map((item) => (
-        <PaintWallFace
-          key={item.key}
-          floorId={floorId}
-          floor={floor}
-          wall={item.wall}
-          side={item.side}
-          hasFinish={item.hasFinish}
-        />
-      ))}
-      {wallCutItems.map((item) => (
-        <PaintWallCut
-          key={item.key}
-          floorId={floorId}
-          floor={floor}
-          wall={item.wall}
           hasFinish={item.hasFinish}
         />
       ))}

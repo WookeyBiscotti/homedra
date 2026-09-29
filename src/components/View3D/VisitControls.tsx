@@ -1,10 +1,10 @@
 import { useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
+import { useBuildingStore } from '../../store/buildingStore'
 
 const EYE_HEIGHT = 1.65
 const MOVE_SPEED = 4.2
-const SPRINT_MULT = 1.75
 const LOOK_SENS = 0.002
 const PITCH_LIMIT = Math.PI / 2 - 0.05
 const FOV = 80
@@ -14,8 +14,17 @@ export type VisitActiveState = {
   pointerLocked: boolean
 }
 
+function changeVisitFloor(delta: number) {
+  const { building, activeFloorId, setActiveFloor } = useBuildingStore.getState()
+  const idx = building.floors.findIndex((f) => f.id === activeFloorId)
+  if (idx < 0) return
+  const next = building.floors[idx + delta]
+  if (next) setActiveFloor(next.id)
+}
+
 /**
  * Shooter-style FPS: fullscreen + Pointer Lock, relative mouse look, WASD.
+ * Space / Shift — этаж выше / ниже.
  */
 export function VisitControls({
   spawn,
@@ -36,7 +45,6 @@ export function VisitControls({
     back: false,
     left: false,
     right: false,
-    sprint: false,
   })
   const pointerLocked = useRef(false)
   const forward = useRef(new THREE.Vector3())
@@ -44,10 +52,20 @@ export function VisitControls({
   const euler = useRef(new THREE.Euler(0, 0, 0, 'YXZ'))
   const lookDelta = useRef({ x: 0, y: 0 })
   const onActiveChangeRef = useRef(onActiveChange)
+  const heightAtWorldRef = useRef(heightAtWorld)
+  const floorYRef = useRef(floorY)
 
   useEffect(() => {
     onActiveChangeRef.current = onActiveChange
   }, [onActiveChange])
+
+  useEffect(() => {
+    heightAtWorldRef.current = heightAtWorld
+  }, [heightAtWorld])
+
+  useEffect(() => {
+    floorYRef.current = floorY
+  }, [floorY])
 
   const emit = () => {
     onActiveChangeRef.current?.({
@@ -56,13 +74,13 @@ export function VisitControls({
     })
   }
 
+  const surfaceAt = (x: number, z: number) =>
+    heightAtWorldRef.current?.(x, z) ?? floorYRef.current
+
+  // Spawn / re-enter: reset pose at plan center.
   useEffect(() => {
     camera.rotation.order = 'YXZ'
-    camera.position.set(
-      spawnX,
-      (heightAtWorld?.(spawnX, spawnZ) ?? floorY) + EYE_HEIGHT,
-      spawnZ,
-    )
+    camera.position.set(spawnX, surfaceAt(spawnX, spawnZ) + EYE_HEIGHT, spawnZ)
     camera.rotation.set(0, 0, 0)
     euler.current.set(0, 0, 0, 'YXZ')
     camera.quaternion.setFromEuler(euler.current)
@@ -70,7 +88,13 @@ export function VisitControls({
       ;(camera as THREE.PerspectiveCamera).fov = FOV
       ;(camera as THREE.PerspectiveCamera).updateProjectionMatrix()
     }
-  }, [camera, spawnX, spawnZ, floorY, heightAtWorld])
+  }, [camera, spawnX, spawnZ])
+
+  // Floor change: keep position/look, move eye to the new walking surface.
+  useEffect(() => {
+    camera.position.y =
+      surfaceAt(camera.position.x, camera.position.z) + EYE_HEIGHT
+  }, [camera, floorY, heightAtWorld])
 
   useEffect(() => {
     const el = gl.domElement
@@ -143,6 +167,18 @@ export function VisitControls({
         exitCapture()
         return
       }
+      if (pointerLocked.current && down && !e.repeat) {
+        if (e.code === 'Space') {
+          e.preventDefault()
+          changeVisitFloor(1)
+          return
+        }
+        if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+          e.preventDefault()
+          changeVisitFloor(-1)
+          return
+        }
+      }
       switch (e.code) {
         case 'KeyW':
         case 'ArrowUp':
@@ -160,10 +196,9 @@ export function VisitControls({
         case 'ArrowRight':
           keys.current.right = down
           break
-        case 'ShiftLeft':
-        case 'ShiftRight':
-          keys.current.sprint = down
-          break
+        case 'Space':
+          if (pointerLocked.current) e.preventDefault()
+          return
         default:
           return
       }
@@ -224,8 +259,7 @@ export function VisitControls({
       }
     }
 
-    const surfaceY =
-      heightAtWorld?.(camera.position.x, camera.position.z) ?? floorY
+    const surfaceY = surfaceAt(camera.position.x, camera.position.z)
 
     if (!pointerLocked.current) {
       camera.position.y = surfaceY + EYE_HEIGHT
@@ -239,8 +273,7 @@ export function VisitControls({
       if (forward.current.lengthSq() > 1e-8) {
         forward.current.normalize()
         rightVec.current.set(-forward.current.z, 0, forward.current.x)
-        const step =
-          MOVE_SPEED * (k.sprint ? SPRINT_MULT : 1) * t
+        const step = MOVE_SPEED * t
         if (k.forward) camera.position.addScaledVector(forward.current, step)
         if (k.back) camera.position.addScaledVector(forward.current, -step)
         if (k.left) camera.position.addScaledVector(rightVec.current, -step)

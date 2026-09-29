@@ -103,7 +103,7 @@ export function setFloorPlateMaterial(
   return updateFloorPlateFields(floor, id, { material })
 }
 
-/** Resolve finish for a paint region key (room or free plate). */
+/** Resolve finish for a paint region key (room, opening threshold, or free plate). */
 export function resolveFloorRegionMaterial(
   floor: Floor,
   key: string,

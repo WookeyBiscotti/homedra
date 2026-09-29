@@ -119,9 +119,8 @@ function considerFinishFace(
 }
 
 /**
- * Snap a plan-space point so objects clip flush to wall finish cladding
- * and other AABBs. Wall snap uses the textured finish plane (solid face +
- * WALL_FINISH_OUTSET), not the wall core / centerline.
+ * Snap a plan-space point so objects clip flush to the wall solid face
+ * and other AABBs (not the wall core / centerline).
  */
 export function snapObjectXY(
   floor: Floor,
@@ -153,7 +152,7 @@ export function snapObjectXY(
       let fa: { x: number; y: number }
       let fb: { x: number; y: number }
       if (ends) {
-        // Solid outer face → finish cladding plane (same as wallFaceFrame).
+        // Solid outer face (same as wallFaceFrame).
         fa = {
           x: ends.a.x + nx * WALL_FINISH_OUTSET,
           y: ends.a.y + ny * WALL_FINISH_OUTSET,

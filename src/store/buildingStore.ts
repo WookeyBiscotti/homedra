@@ -61,7 +61,7 @@ import {
   type LandscapePlant,
   normalizeLandscapeGrass,
   type PlantShape,
-  SEEDTHREE_GRASS_DEFAULTS,
+  LANDSCAPE_GRASS_DEFAULTS,
   type SculptMode,
   type LightingSettings,
   type MaterialRef,
@@ -173,6 +173,7 @@ import {
 import { decodeBytes, decodeHeights, encodeBytes } from '../landscape/maps'
 import { stampCoverage, stampSplat } from '../landscape/paintMaps'
 import { defaultPlantShape, resolvePlantShape } from '../landscape/plantShape'
+import { DEFAULT_LANDSCAPE_MONTH } from '../landscape/season'
 import {
   createGrassLayer,
   emptyGrassDoc,
@@ -185,18 +186,26 @@ import {
   buildLockMask,
   ensureTerrain,
   footprintHolesForLock,
+  lockFootprintHeights,
   persistHeights,
   pointInFootprint,
   sculptStamp,
   terrainFrame,
 } from '../landscape/terrain'
+import {
+  applyPlotFrame,
+  clampHouseDelta,
+  clampPlotFrame,
+  houseOffsetOnPlot,
+  plotFrame,
+  resizePlotEdge,
+  translateStories,
+  type PlotEdge,
+  type PlotPatch,
+} from '../landscape/site'
 
 const STORAGE_KEY = 'interior-planner-project'
 const MAX_HISTORY = 50
-
-function cloneBuilding(b: Building): Building {
-  return structuredClone(b)
-}
 
 /** Read last saved project from localStorage, or null if missing/invalid. */
 function readStoredBuilding(): Building | null {
@@ -231,6 +240,8 @@ interface BuildingState {
   paintBrush: MaterialRef | null
   lighting: LightingSettings
   lightingMenuOpen: boolean
+  landscapeMonth: number
+  setLandscapeMonth: (month: number) => void
   selection: Selection
   conflict: boolean
   wallDraftFrom: string | null
@@ -287,6 +298,10 @@ interface BuildingState {
   setViewMode: (mode: ViewMode) => void
   setSceneMode: (mode: SceneMode) => void
   setPaintBrush: (brush: MaterialRef | null) => void
+  /**
+   * Update paint brush settings only. Does not rewrite already-painted finishes.
+   */
+  updatePaintBrush: (brush: MaterialRef) => void
   setLighting: (patch: Partial<LightingSettings>) => void
   resetLighting: () => void
   setLightingMenuOpen: (open: boolean) => void
@@ -476,6 +491,7 @@ interface BuildingState {
         | 'texRegion'
       >
     >,
+    opts?: { history?: boolean },
   ) => void
   dragTile: (id: string, u: number, v: number, ids?: string[]) => void
   selectTile: (floorId: string, id: string, shift?: boolean) => void
@@ -549,6 +565,8 @@ interface BuildingState {
   selectObject: (floorId: string, id: string) => void
   selectPlant: (id: string) => void
   placePlantAt: (x: number, y: number) => void
+  /** Drag a plant in plan (no history). */
+  dragPlant: (id: string, x: number, y: number) => void
   updatePlant: (
     id: string,
     patch: Partial<
@@ -570,6 +588,7 @@ interface BuildingState {
   setGroundPaintLayerMaterial: (
     layer: 0 | 1 | 2 | 3,
     material: MaterialRef | null,
+    opts?: { history?: boolean },
   ) => void
   pendingPlantSpecies: string | null
   pendingPlantScale: number
@@ -603,6 +622,19 @@ interface BuildingState {
   stampGroundPaintAt: (x: number, y: number, erase: boolean) => void
   stampGrassAt: (x: number, y: number, erase: boolean) => void
   ensureLandscapeReady: () => void
+  /** Live XZ offset of the house while dragging it on the plot. */
+  siteHousePreview: { dx: number; dy: number } | null
+  setLandscapePlot: (patch: PlotPatch) => void
+  setHouseOffsetOnPlot: (offsetX: number, offsetY: number) => void
+  centerHouseOnPlot: () => void
+  resizeLandscapePlotEdge: (
+    edge: PlotEdge,
+    world: number,
+    opts?: { history?: boolean },
+  ) => void
+  beginSiteHouseDrag: () => void
+  previewSiteHouseDrag: (dx: number, dy: number) => void
+  commitSiteHouseDrag: () => void
 
   transformGizmoMode: TransformGizmoMode
   setTransformGizmoMode: (mode: TransformGizmoMode) => void
@@ -728,6 +760,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     paintBrush: null,
     lighting: { ...DEFAULT_LIGHTING },
     lightingMenuOpen: false,
+    landscapeMonth: DEFAULT_LANDSCAPE_MONTH,
     selection: null,
     conflict: false,
     wallDraftFrom: null,
@@ -763,12 +796,13 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     pendingPlantSpecies: null,
     pendingPlantScale: 1,
     pendingPlantShape: defaultPlantShape('ponderosaPine'),
-    grassDensity: SEEDTHREE_GRASS_DEFAULTS.density,
-    grassTuftHeight: SEEDTHREE_GRASS_DEFAULTS.height,
-    grassTuftWidth: SEEDTHREE_GRASS_DEFAULTS.width,
-    grassColor: SEEDTHREE_GRASS_DEFAULTS.color,
-    grassSeed: SEEDTHREE_GRASS_DEFAULTS.seed,
+    grassDensity: LANDSCAPE_GRASS_DEFAULTS.density,
+    grassTuftHeight: LANDSCAPE_GRASS_DEFAULTS.height,
+    grassTuftWidth: LANDSCAPE_GRASS_DEFAULTS.width,
+    grassColor: LANDSCAPE_GRASS_DEFAULTS.color,
+    grassSeed: LANDSCAPE_GRASS_DEFAULTS.seed,
     activeGrassLayerId: null,
+    siteHousePreview: null,
     history: [],
     future: [],
     statusMessage: null,
@@ -781,7 +815,8 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     pushHistory: () => {
       const { building, history } = get()
       set({
-        history: [...history.slice(-(MAX_HISTORY - 1)), cloneBuilding(building)],
+        // Buildings are replaced, not mutated — keep the object as a snapshot.
+        history: [...history.slice(-(MAX_HISTORY - 1)), building],
         future: [],
       })
     },
@@ -794,7 +829,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       set({
         building: prev,
         history: history.slice(0, -1),
-        future: [cloneBuilding(building), ...future].slice(0, MAX_HISTORY),
+        future: [building, ...future].slice(0, MAX_HISTORY),
         activeFloorId: floorExists ? activeFloorId : prev.floors[0].id,
         conflict: false,
         selection: null,
@@ -816,7 +851,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       set({
         building: next,
         future: future.slice(1),
-        history: [...history, cloneBuilding(building)].slice(-MAX_HISTORY),
+        history: [...history, building].slice(-MAX_HISTORY),
         activeFloorId: floorExists ? activeFloorId : next.floors[0].id,
         conflict: false,
         selection: null,
@@ -925,12 +960,15 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     cutoutDraft: null,
         statusMessage: null as string | null,
       }
+      const dropObjectSel = (sel: Selection) =>
+        sel?.kind === 'object' ? null : sel
       if (workbench === 'draft') {
         set({
           workbench,
           viewMode: '2d',
           sceneMode: prev === 'paint' ? 'interior' : prev,
           tool: 'select',
+          selection: dropObjectSel(get().selection),
           modelBrowserOpen: false,
           collectionBrowserOpen: false,
           ...drafts,
@@ -944,6 +982,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
           sceneMode: 'paint',
           tool: 'select',
           pendingModel: null,
+          selection: dropObjectSel(get().selection),
           modelBrowserOpen: false,
           collectionBrowserOpen: false,
           ...drafts,
@@ -955,6 +994,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
           workbench,
           sceneMode: prev === 'paint' ? 'interior' : prev,
           tool: 'select',
+          selection: dropObjectSel(get().selection),
           modelBrowserOpen: false,
           collectionBrowserOpen: false,
           ...drafts,
@@ -990,6 +1030,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
           activeFloorId: g?.id ?? get().activeFloorId,
           pendingModel: null,
           pendingPlantSpecies: null,
+          selection: dropObjectSel(get().selection),
           modelBrowserOpen: false,
           collectionBrowserOpen: false,
           ...drafts,
@@ -1011,7 +1052,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     setViewMode: (viewMode) => {
       const { workbench, sceneMode } = get()
       // Paint only makes sense in 3D — leaving 3D exits paint workbench
-      if (viewMode === '2d' && (workbench === 'paint' || workbench === 'landscape')) {
+      if (viewMode === '2d' && workbench === 'paint') {
         set({
           viewMode,
           workbench: 'draft',
@@ -1038,10 +1079,23 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       })
     },
     setPaintBrush: (paintBrush) => set({ paintBrush }),
+    updatePaintBrush: (brush) => {
+      // Brush is independent of already-painted finishes — only the next
+      // paint stroke uses these settings. Edit a selected surface in Properties
+      // to change a covering that is already on a wall/floor.
+      set({ paintBrush: brush })
+    },
     setLighting: (patch) =>
       set({ lighting: { ...get().lighting, ...patch } }),
     resetLighting: () => set({ lighting: { ...DEFAULT_LIGHTING } }),
     setLightingMenuOpen: (lightingMenuOpen) => set({ lightingMenuOpen }),
+    setLandscapeMonth: (month) => {
+      const n = Math.round(Number(month))
+      const landscapeMonth = Number.isFinite(n)
+        ? Math.min(12, Math.max(1, n))
+        : DEFAULT_LANDSCAPE_MONTH
+      set({ landscapeMonth })
+    },
     setSelection: (selection) => set({ selection }),
     selectOpening: (floorId, id) =>
       set({
@@ -2206,6 +2260,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         get().tileRotation,
         get().tileFillPattern,
         floor,
+        { snap: get().tileSnapEnabled },
       )
       if (tiles.length === 0) {
         set({ statusMessage: 'Нечего заливать' })
@@ -2220,8 +2275,8 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       })
       return tiles.length
     },
-    updateTile: (id, patch) => {
-      get().pushHistory()
+    updateTile: (id, patch, opts) => {
+      if (opts?.history !== false) get().pushHistory()
       const next = updateTileFields(get().activeFloor(), id, patch)
       set({ building: replaceFloor(get().building, next) })
     },
@@ -2480,13 +2535,17 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       }
       set({
         building: replaceFloor(get().building, next),
-        selection: { kind: 'object', id: obj.id },
+        selection:
+          get().workbench === 'furnish'
+            ? { kind: 'object', id: obj.id }
+            : get().selection,
         transformGizmoMode: 'translate',
         statusMessage: 'Объект размещён',
       })
     },
 
     updatePlacedObject: (id, patch, opts) => {
+      if (get().workbench !== 'furnish') return
       if (opts?.history !== false) get().pushHistory()
       const floor = get().activeFloor()
       const next: Floor = {
@@ -2518,6 +2577,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     },
 
     dragPlacedObject: (id, x, y) => {
+      if (get().workbench !== 'furnish') return
       const floor = get().activeFloor()
       let px = x
       let py = y
@@ -2543,7 +2603,13 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     },
 
     copySelectedObject: () => {
-      const { selection } = get()
+      const { selection, workbench } = get()
+      if (workbench !== 'furnish') {
+        set({
+          statusMessage: 'Копировать объект можно только в режиме «Объекты».',
+        })
+        return
+      }
       if (selection?.kind !== 'object') {
         set({ statusMessage: 'Сначала выберите объект' })
         return
@@ -2569,6 +2635,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     },
 
     selectObject: (floorId, id) => {
+      if (get().workbench !== 'furnish') return
       const prev = get().selection
       const same = prev?.kind === 'object' && prev.id === id
       set({
@@ -2583,8 +2650,6 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         // Stop placement mode so gizmo / LMB work on the object
         pendingModel: null,
         tool: 'select',
-        workbench: get().workbench === 'landscape' ? 'landscape' : 'furnish',
-        viewMode: '3d',
         statusMessage: null,
         // New selection → drag = move; double-click later cycles mode
         ...(same ? {} : { transformGizmoMode: 'translate' as const }),
@@ -2788,6 +2853,162 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       if (Object.keys(patch).length > 0) set(patch)
     },
 
+    setLandscapePlot: (patch) => {
+      get().ensureLandscapeReady()
+      const building = get().building
+      const g = building.floors.find(isGroundFloor)
+      if (!g) return
+      const terrain = ensureTerrain(building, g.landscapeTerrain)
+      const cur = plotFrame(terrain)
+      const next = clampPlotFrame(
+        {
+          size: patch.sizeX ?? cur.size,
+          sizeY: patch.sizeY ?? cur.sizeY ?? cur.size,
+          originX: patch.originX ?? cur.originX,
+          originY: patch.originY ?? cur.originY,
+        },
+        building,
+      )
+      const applied = applyPlotFrame(
+        terrain,
+        g.landscapePaint,
+        g.landscapeGrass,
+        next,
+      )
+      get().pushHistory()
+      set({
+        building: replaceFloor(building, {
+          ...g,
+          landscapeTerrain: applied.terrain,
+          landscapePaint: applied.paint,
+          landscapeGrass: applied.grass,
+        }),
+      })
+    },
+
+    setHouseOffsetOnPlot: (offsetX, offsetY) => {
+      get().ensureLandscapeReady()
+      const building = get().building
+      const g = building.floors.find(isGroundFloor)
+      if (!g) return
+      const terrain = ensureTerrain(building, g.landscapeTerrain)
+      const frame = plotFrame(terrain)
+      const cur = houseOffsetOnPlot(building, frame)
+      const clamped = clampHouseDelta(
+        building,
+        offsetX - cur.x,
+        offsetY - cur.y,
+        frame,
+      )
+      if (Math.abs(clamped.dx) < 1e-6 && Math.abs(clamped.dy) < 1e-6) return
+      get().pushHistory()
+      let next = translateStories(building, clamped.dx, clamped.dy)
+      const ground = next.floors.find(isGroundFloor) ?? g
+      const heights = decodeHeights(
+        terrain.heightPng,
+        terrain.resolution * terrain.resolution,
+      )
+      lockFootprintHeights(
+        heights,
+        buildLockMask(
+          terrain.resolution,
+          frame,
+          footprintHolesForLock(next),
+        ),
+      )
+      set({
+        building: replaceFloor(next, {
+          ...ground,
+          landscapeTerrain: persistHeights(terrain, heights),
+        }),
+        siteHousePreview: null,
+      })
+    },
+
+    centerHouseOnPlot: () => get().setHouseOffsetOnPlot(0, 0),
+
+    resizeLandscapePlotEdge: (edge, world, opts) => {
+      get().ensureLandscapeReady()
+      const building = get().building
+      const g = building.floors.find(isGroundFloor)
+      if (!g) return
+      const terrain = ensureTerrain(building, g.landscapeTerrain)
+      const next = resizePlotEdge(plotFrame(terrain), edge, world, building)
+      const applied = applyPlotFrame(
+        terrain,
+        g.landscapePaint,
+        g.landscapeGrass,
+        next,
+      )
+      if (opts?.history !== false) get().pushHistory()
+      set({
+        building: replaceFloor(get().building, {
+          ...g,
+          landscapeTerrain: applied.terrain,
+          landscapePaint: applied.paint,
+          landscapeGrass: applied.grass,
+        }),
+      })
+    },
+
+    beginSiteHouseDrag: () => {
+      get().ensureLandscapeReady()
+      set({
+        siteHousePreview: { dx: 0, dy: 0 },
+        transformDragging: true,
+        tool: 'select',
+        selection: null,
+      })
+    },
+
+    previewSiteHouseDrag: (dx, dy) => {
+      const building = get().building
+      const g = building.floors.find(isGroundFloor)
+      if (!g) return
+      const frame = plotFrame(ensureTerrain(building, g.landscapeTerrain))
+      const clamped = clampHouseDelta(building, dx, dy, frame)
+      set({ siteHousePreview: clamped })
+    },
+
+    commitSiteHouseDrag: () => {
+      const preview = get().siteHousePreview
+      if (!preview || (Math.abs(preview.dx) < 1e-6 && Math.abs(preview.dy) < 1e-6)) {
+        set({ transformDragging: false, siteHousePreview: null })
+        return
+      }
+      const building = get().building
+      const g = building.floors.find(isGroundFloor)
+      if (!g) {
+        set({ transformDragging: false, siteHousePreview: null })
+        return
+      }
+      get().pushHistory()
+      const terrain = ensureTerrain(building, g.landscapeTerrain)
+      const frame = plotFrame(terrain)
+      const next = translateStories(building, preview.dx, preview.dy)
+      const ground = next.floors.find(isGroundFloor) ?? g
+      const heights = decodeHeights(
+        terrain.heightPng,
+        terrain.resolution * terrain.resolution,
+      )
+      lockFootprintHeights(
+        heights,
+        buildLockMask(
+          terrain.resolution,
+          frame,
+          footprintHolesForLock(next),
+        ),
+      )
+      set({
+        building: replaceFloor(next, {
+          ...ground,
+          landscapeTerrain: persistHeights(terrain, heights),
+        }),
+        siteHousePreview: null,
+        transformDragging: false,
+      })
+    },
+
     beginLandscapeStroke: () => {
       get().ensureLandscapeReady()
       get().pushHistory()
@@ -2826,10 +3047,10 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       })
     },
 
-    setGroundPaintLayerMaterial: (layer, material) => {
+    setGroundPaintLayerMaterial: (layer, material, opts) => {
       const g = get().building.floors.find(isGroundFloor)
       if (!g) return
-      get().pushHistory()
+      if (opts?.history !== false) get().pushHistory()
       const layers: [
         MaterialRef | null,
         MaterialRef | null,
@@ -2972,6 +3193,27 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       })
     },
 
+    dragPlant: (id, x, y) => {
+      if (get().workbench !== 'landscape') return
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return
+      const g = get().building.floors.find(isGroundFloor)
+      if (!g) return
+      if (pointInFootprint(get().building, x, y)) {
+        set({ statusMessage: 'Нельзя ставить на пятне здания' })
+        return
+      }
+      set({
+        building: replaceFloor(get().building, {
+          ...g,
+          plants: (g.plants ?? []).map((p) =>
+            p.id === id ? { ...p, x, y } : p,
+          ),
+        }),
+        selection: { kind: 'plant', id },
+        statusMessage: null,
+      })
+    },
+
     updatePlant: (id, patch) => {
       const g = get().building.floors.find(isGroundFloor)
       if (!g) return
@@ -3075,15 +3317,17 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         set({ selection: { kind: 'vertex', id: vertex.id } })
         return
       }
-      const obj = (floor.objects ?? []).find((o) => {
-        const half = planHalfSizeOf(o)
-        return (
-          Math.abs(o.x - x) <= half.x && Math.abs(o.y - y) <= half.y
-        )
-      })
-      if (obj) {
-        set({ selection: { kind: 'object', id: obj.id } })
-        return
+      if (get().workbench === 'furnish') {
+        const obj = (floor.objects ?? []).find((o) => {
+          const half = planHalfSizeOf(o)
+          return (
+            Math.abs(o.x - x) <= half.x && Math.abs(o.y - y) <= half.y
+          )
+        })
+        if (obj) {
+          set({ selection: { kind: 'object', id: obj.id } })
+          return
+        }
       }
       const tile = hitFloorTile(floor, x, y)
       if (tile) {
@@ -3839,6 +4083,12 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       if (wallLike && workbench !== 'draft') {
         set({
           statusMessage: 'Стены удаляют только в режиме «Планировка».',
+        })
+        return
+      }
+      if (selection.kind === 'object' && workbench !== 'furnish') {
+        set({
+          statusMessage: 'Объекты удаляют только в режиме «Объекты».',
         })
         return
       }

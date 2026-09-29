@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { TileSpec } from '../engine/types'
-import { defaultTileSpec, defaultTileTexRegion } from '../engine/types'
+import { defaultTileSpec, defaultTileTexRegion, keepMaterialLook } from '../engine/types'
+import { MaterialPbrFields } from './PbrMaterialEditor'
 import { MaterialSlot } from './TextureBrowser'
 import { TextureRegionPicker } from './TextureRegionPicker'
 import { TileThumb } from './TileThumb'
@@ -80,20 +81,34 @@ export function TileEditor({
       <MaterialSlot
         label="Рисунок"
         value={draft.material}
+        showRepeat={false}
         onChange={(material) =>
-          setDraft({ ...draft, material, texRegion: defaultTileTexRegion() })
+          setDraft({
+            ...draft,
+            material: keepMaterialLook(draft.material, material),
+            texRegion: defaultTileTexRegion(),
+          })
         }
         onClear={() =>
           setDraft({
             ...draft,
-            material: defaultTileSpec().material,
+            material: keepMaterialLook(
+              draft.material,
+              defaultTileSpec().material,
+            ),
             texRegion: defaultTileTexRegion(),
           })
         }
       />
+      <p className="tool-group-title">PBR</p>
+      <MaterialPbrFields
+        value={draft.material}
+        onChange={(material) => setDraft({ ...draft, material })}
+      />
       <TextureRegionPicker
         material={draft.material}
         value={draft.texRegion}
+        hint="Рамка на текстуре — какой кусок попадёт на плитку. Тяните середину или углы."
         onChange={(texRegion) => setDraft({ ...draft, texRegion })}
       />
       <div className="copy-floor-actions">

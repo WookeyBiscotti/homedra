@@ -79,9 +79,23 @@ export function clampOpeningToWall(
   return { offset: center, width: w }
 }
 
+export function floorOpeningKey(id: Id): string {
+  return `opening:${id}`
+}
+
+export function floorOpeningIdFromKey(key: string): Id | null {
+  return key.startsWith('opening:') ? key.slice('opening:'.length) : null
+}
+
+/** Doors/passages flush with the floor (no sill) leave a walkable strip to finish. */
+export function isFloorFlushOpening(opening: Opening): boolean {
+  return opening.sillHeight <= 1e-3
+}
+
 export function openingPlanRect(
   floor: Floor,
   opening: Opening,
+  opts?: { cutEps?: number },
 ): Array<{ x: number; y: number }> | null {
   const wall = floor.walls.find((w) => w.id === opening.wallId)
   if (!wall) return null
@@ -93,7 +107,8 @@ export function openingPlanRect(
   const nx = -uy
   const ny = ux
   const halfW = opening.width / 2
-  const halfT = wall.thickness / 2 + OPENING_CUT_EPS
+  const cutEps = opts?.cutEps ?? OPENING_CUT_EPS
+  const halfT = wall.thickness / 2 + cutEps
   const cx = ends.a.x + ux * opening.offset
   const cy = ends.a.y + uy * opening.offset
 
@@ -108,6 +123,14 @@ export function openingPlanRect(
     along(halfW, halfT),
     along(-halfW, halfT),
   ]
+}
+
+/** Floor-finish polygon under a flush opening (exact wall thickness, no cut eps). */
+export function openingFloorPlanRect(
+  floor: Floor,
+  opening: Opening,
+): Array<{ x: number; y: number }> | null {
+  return openingPlanRect(floor, opening, { cutEps: 0 })
 }
 
 /** Opening span along wall as [start, end] distances from vertex a. */

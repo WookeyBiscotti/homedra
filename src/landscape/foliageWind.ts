@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 
-/** Shared across every foliage / grass program so one tick drives the grove. */
+/** Shared across every foliage program so one tick drives the grove. */
 export const foliageWindUniforms = {
   uTime: { value: 0 },
   uWindAmp: { value: 0.11 },
@@ -29,27 +29,6 @@ const FOLIAGE_BEND = `#include <begin_vertex>
   transformed.y += flutter * tip * uWindAmp * 0.28;
 }`
 
-const GRASS_BEND = `#include <begin_vertex>
-{
-  float tip = position.y;
-#ifdef USE_INSTANCING
-  vec3 worldP = (instanceMatrix * vec4(transformed, 1.0)).xyz;
-#else
-  vec3 worldP = (modelMatrix * vec4(transformed, 1.0)).xyz;
-#endif
-  float phase = worldP.x * 0.35 + worldP.z * 0.31;
-  float gust = sin(uTime * 1.15 + phase);
-  float flutter = sin(uTime * 4.8 + phase * 2.2);
-  float wave = (0.8 * gust + 0.2 * flutter) * tip * uWindAmp * 1.15;
-  transformed.x += uWindDir.x * wave;
-  transformed.z += uWindDir.y * wave;
-}`
-
-/** Keep both sides of a grass card in the sky hemisphere — DoubleSide would flip Y down. */
-const GRASS_NORMAL = `#include <normal_fragment_begin>
-normal = normalize(vec3(normal.x, abs(normal.y) + 0.55, normal.z));
-`
-
 export function applyFoliageWind(mat: THREE.MeshStandardMaterial): THREE.MeshStandardMaterial {
   mat.userData.foliageWind = true
   mat.customProgramCacheKey = () => 'foliage-wind-v1'
@@ -60,24 +39,6 @@ export function applyFoliageWind(mat: THREE.MeshStandardMaterial): THREE.MeshSta
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', VERTEX_COMMON)
       .replace('#include <begin_vertex>', FOLIAGE_BEND)
-  }
-  return mat
-}
-
-export function applyGrassWind(mat: THREE.MeshStandardMaterial): THREE.MeshStandardMaterial {
-  mat.userData.foliageWind = true
-  mat.customProgramCacheKey = () => 'grass-wind-v2'
-  mat.onBeforeCompile = (shader) => {
-    shader.uniforms.uTime = foliageWindUniforms.uTime
-    shader.uniforms.uWindAmp = foliageWindUniforms.uWindAmp
-    shader.uniforms.uWindDir = foliageWindUniforms.uWindDir
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', VERTEX_COMMON)
-      .replace('#include <begin_vertex>', GRASS_BEND)
-    shader.fragmentShader = shader.fragmentShader.replace(
-      '#include <normal_fragment_begin>',
-      GRASS_NORMAL,
-    )
   }
   return mat
 }

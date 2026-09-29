@@ -16,15 +16,17 @@ import {
   wallsShareAxis,
   type WallFace,
 } from '../engine/geometry/wallSolid'
-import { selectedVertexIds, selectedWallIds, selectedTileIds, openingKindLabel, slabOpeningKindLabel, isGroundFloor, isStoryFloor, wallLength, PIPE_MEDIUM_META, electricalDeviceLabel, electricalDeviceSize, ensureCableNetwork, ensurePipeNetwork, pipeFixtureLabel, pipeMediumLabel, tileSurfaceLabel, defaultTileSpec, defaultTileTexRegion, type PipeMedium, type WallSide } from '../engine/types'
+import { selectedVertexIds, selectedWallIds, selectedTileIds, openingKindLabel, slabOpeningKindLabel, isGroundFloor, isStoryFloor, wallLength, PIPE_MEDIUM_META, electricalDeviceLabel, electricalDeviceSize, ensureCableNetwork, ensurePipeNetwork, pipeFixtureLabel, pipeMediumLabel, tileSurfaceLabel, defaultTileSpec, defaultTileTexRegion, keepMaterialLook, placedObjectWorldSize, scaleForWorldSize, type PipeMedium, type WallSide } from '../engine/types'
 import { segmentEmbed, segmentLength } from '../engine/geometry/mep'
 import { useBuildingStore } from '../store/buildingStore'
 import { resolvePlantShape } from '../landscape/plantShape'
 import { speciesByKey } from '../landscape/species'
-import { GrassFields, GrassTypeList, PlantShapeFields } from './LandscapeSettings'
+import { GrassFields, GrassTypeList, PlantShapeFields, SitePlotFields } from './LandscapeSettings'
 import { grassLayers } from '../landscape/grassLayers'
 import { ConstraintsList } from './ConstraintsList'
 import { CopyFloorOptionsForm } from './CopyFloorOptionsForm'
+import { CoveringSlot } from './CoveringEditor'
+import { MaterialPbrFields } from './PbrMaterialEditor'
 import { MaterialSlot } from './TextureBrowser'
 import { TextureRegionPicker } from './TextureRegionPicker'
 import { TileThumb } from './TileThumb'
@@ -33,6 +35,7 @@ import {
   detectRooms,
   roomsForWallSides,
 } from '../engine/geometry/wallSolid'
+import { floorOpeningIdFromKey } from '../engine/geometry/openings'
 
 export function PropertiesPanel() {
   const floor = useBuildingStore((s) => s.activeFloor())
@@ -141,6 +144,7 @@ export function PropertiesPanel() {
     selection?.kind === 'object'
       ? (floor.objects ?? []).find((o) => o.id === selection.id)
       : null
+  const objectWorld = placedObject ? placedObjectWorldSize(placedObject) : null
   const plant =
     selection?.kind === 'plant'
       ? (ground?.plants ?? []).find((p) => p.id === selection.id) ?? null
@@ -163,6 +167,14 @@ export function PropertiesPanel() {
     selection?.kind === 'room'
       ? detectRooms(floor).find((r) => r.key === selection.key) ?? null
       : null
+  const floorOpening =
+    selection?.kind === 'room' && floorOpeningIdFromKey(selection.key)
+      ? (floor.openings ?? []).find(
+          (o) => o.id === floorOpeningIdFromKey(selection.key),
+        ) ?? null
+      : null
+  const floorOpeningKey =
+    selection?.kind === 'room' && floorOpening ? selection.key : null
   const wallSideRooms = wall
     ? roomsForWallSides(floor, wall.id)
     : { pos: null, neg: null }
@@ -711,6 +723,11 @@ export function PropertiesPanel() {
       )}
 
       {isLandscape && !placedObject && !plant && (
+        <>
+        <section className="prop-section">
+          <h3>Участок</h3>
+          <SitePlotFields />
+        </section>
         <section className="prop-section">
           <h3>Трава</h3>
           <p className="muted">
@@ -733,6 +750,7 @@ export function PropertiesPanel() {
             onChange={setGrassParams}
           />
         </section>
+        </>
       )}
 
       {isLandscape && plant && (
@@ -803,7 +821,7 @@ export function PropertiesPanel() {
       )}
 
       {((!isGround && (isDraft || isPaint || isFurnish || isTiling)) ||
-        (isLandscape && placedObject)) && (
+        (isFurnish && placedObject)) && (
         <>
       {isDraft && slabOpening && (
         <section className="prop-section">
@@ -867,11 +885,12 @@ export function PropertiesPanel() {
       {isPaint && slabOpening && (
         <section className="prop-section">
           <h3>{slabOpeningKindLabel(slabOpening.kind)}</h3>
-          <MaterialSlot
+          <CoveringSlot
             label="Срезы (стенки выреза)"
             value={slabOpening.material}
             onChange={(ref) => setSlabOpeningMaterial(slabOpening.id, ref)}
             onClear={() => setSlabOpeningMaterial(slabOpening.id, null)}
+            onCommit={() => pushHistory()}
           />
         </section>
       )}
@@ -938,11 +957,12 @@ export function PropertiesPanel() {
       {isPaint && floorPlate && (
         <section className="prop-section">
           <h3>Пол без стен</h3>
-          <MaterialSlot
+          <CoveringSlot
             label="Покрытие пола"
             value={floorPlate.material}
             onChange={(ref) => setFloorPlateMaterial(floorPlate.id, ref)}
             onClear={() => setFloorPlateMaterial(floorPlate.id, null)}
+            onCommit={() => pushHistory()}
           />
         </section>
       )}
@@ -1048,11 +1068,12 @@ export function PropertiesPanel() {
       {isPaint && volumeBox && (
         <section className="prop-section">
           <h3>Короб</h3>
-          <MaterialSlot
+          <CoveringSlot
             label="Текстура короба"
             value={volumeBox.material}
             onChange={(ref) => setVolumeBoxMaterial(volumeBox.id, ref)}
             onClear={() => setVolumeBoxMaterial(volumeBox.id, null)}
+            onCommit={() => pushHistory()}
           />
         </section>
       )}
@@ -1162,11 +1183,12 @@ export function PropertiesPanel() {
       {isPaint && volumeCutout && (
         <section className="prop-section">
           <h3>Вырез в коробе</h3>
-          <MaterialSlot
+          <CoveringSlot
             label="Срезы выреза"
             value={volumeCutout.material}
             onChange={(ref) => setVolumeCutoutMaterial(volumeCutout.id, ref)}
             onClear={() => setVolumeCutoutMaterial(volumeCutout.id, null)}
+            onCommit={() => pushHistory()}
           />
         </section>
       )}
@@ -1270,22 +1292,35 @@ export function PropertiesPanel() {
           <MaterialSlot
             label="Рисунок"
             value={placedTile.material}
+            showRepeat={false}
             onChange={(ref) =>
               updateTile(placedTile.id, {
-                material: ref,
+                material: keepMaterialLook(placedTile.material, ref),
                 texRegion: defaultTileTexRegion(),
               })
             }
             onClear={() =>
               updateTile(placedTile.id, {
-                material: defaultTileSpec().material,
+                material: keepMaterialLook(
+                  placedTile.material,
+                  defaultTileSpec().material,
+                ),
                 texRegion: defaultTileTexRegion(),
               })
+            }
+          />
+          <p className="tool-group-title">PBR</p>
+          <MaterialPbrFields
+            value={placedTile.material}
+            onCommit={() => pushHistory()}
+            onChange={(material) =>
+              updateTile(placedTile.id, { material }, { history: false })
             }
           />
           <TextureRegionPicker
             material={placedTile.material}
             value={placedTile.texRegion}
+            hint="Рамка на текстуре — какой кусок попадёт на плитку. Тяните середину или углы."
             onChange={(texRegion) => updateTile(placedTile.id, { texRegion })}
           />
           {placedTile.clip && (
@@ -1300,7 +1335,7 @@ export function PropertiesPanel() {
         </section>
       )}
 
-      {(isFurnish || isLandscape || isDraft) && placedObject && (
+      {isFurnish && placedObject && (
         <section className="prop-section">
           <h3>3D объект</h3>
           <p className="muted">
@@ -1368,11 +1403,100 @@ export function PropertiesPanel() {
               }
             />
           </label>
+          {objectWorld && (
+            <>
+              <label>
+                Ширина (X), м
+                <input
+                  type="number"
+                  min={0.05}
+                  max={50}
+                  step={0.01}
+                  value={Number(objectWorld.x.toFixed(3))}
+                  onFocus={() => pushHistory()}
+                  onChange={(e) =>
+                    updatePlacedObject(
+                      placedObject.id,
+                      {
+                        scaleX: scaleForWorldSize(
+                          Number(e.target.value),
+                          placedObject.sizeX,
+                        ),
+                      },
+                      { history: false },
+                    )
+                  }
+                />
+              </label>
+              <label>
+                Высота (Y), м
+                <input
+                  type="number"
+                  min={0.05}
+                  max={50}
+                  step={0.01}
+                  value={Number(objectWorld.y.toFixed(3))}
+                  onFocus={() => pushHistory()}
+                  onChange={(e) =>
+                    updatePlacedObject(
+                      placedObject.id,
+                      {
+                        scaleY: scaleForWorldSize(
+                          Number(e.target.value),
+                          placedObject.sizeY,
+                        ),
+                      },
+                      { history: false },
+                    )
+                  }
+                />
+              </label>
+              <label>
+                Глубина (Z), м
+                <input
+                  type="number"
+                  min={0.05}
+                  max={50}
+                  step={0.01}
+                  value={Number(objectWorld.z.toFixed(3))}
+                  onFocus={() => pushHistory()}
+                  onChange={(e) =>
+                    updatePlacedObject(
+                      placedObject.id,
+                      {
+                        scaleZ: scaleForWorldSize(
+                          Number(e.target.value),
+                          placedObject.sizeZ,
+                        ),
+                      },
+                      { history: false },
+                    )
+                  }
+                />
+              </label>
+            </>
+          )}
+          <label>
+            Наклон X, °
+            <input
+              type="number"
+              step={1}
+              value={Math.round((placedObject.rotationX * 180) / Math.PI)}
+              onFocus={() => pushHistory()}
+              onChange={(e) =>
+                updatePlacedObject(
+                  placedObject.id,
+                  { rotationX: (Number(e.target.value) * Math.PI) / 180 },
+                  { history: false },
+                )
+              }
+            />
+          </label>
           <label>
             Поворот Y, °
             <input
               type="number"
-              step={5}
+              step={1}
               value={Math.round((placedObject.rotationY * 180) / Math.PI)}
               onFocus={() => pushHistory()}
               onChange={(e) =>
@@ -1385,54 +1509,16 @@ export function PropertiesPanel() {
             />
           </label>
           <label>
-            Масштаб X
+            Наклон Z, °
             <input
               type="number"
-              min={0.05}
-              max={20}
-              step={0.05}
-              value={placedObject.scaleX}
+              step={1}
+              value={Math.round((placedObject.rotationZ * 180) / Math.PI)}
               onFocus={() => pushHistory()}
               onChange={(e) =>
                 updatePlacedObject(
                   placedObject.id,
-                  { scaleX: Number(e.target.value) },
-                  { history: false },
-                )
-              }
-            />
-          </label>
-          <label>
-            Масштаб Y
-            <input
-              type="number"
-              min={0.05}
-              max={20}
-              step={0.05}
-              value={placedObject.scaleY}
-              onFocus={() => pushHistory()}
-              onChange={(e) =>
-                updatePlacedObject(
-                  placedObject.id,
-                  { scaleY: Number(e.target.value) },
-                  { history: false },
-                )
-              }
-            />
-          </label>
-          <label>
-            Масштаб Z
-            <input
-              type="number"
-              min={0.05}
-              max={20}
-              step={0.05}
-              value={placedObject.scaleZ}
-              onFocus={() => pushHistory()}
-              onChange={(e) =>
-                updatePlacedObject(
-                  placedObject.id,
-                  { scaleZ: Number(e.target.value) },
+                  { rotationZ: (Number(e.target.value) * Math.PI) / 180 },
                   { history: false },
                 )
               }
@@ -1482,8 +1568,10 @@ export function PropertiesPanel() {
             </label>
           )}
           <p className="muted">
-            Drag — перемещение. Двойной клик по объекту — смена режима gizmo
-            (двигать / вращать / масштаб). Ctrl+D — копия со смещением.
+            Размеры — в метрах после масштаба. Наклон X/Z и поворот Y — в
+            градусах. Drag — перемещение. Двойной клик по объекту — смена
+            режима gizmo (двигать / вращать / масштаб). Ctrl+D — копия со
+            смещением.
           </p>
           <button
             type="button"
@@ -1656,7 +1744,7 @@ export function PropertiesPanel() {
       {isPaint && wall && (
         <section className="prop-section">
           <h3>Стена</h3>
-          <MaterialSlot
+          <CoveringSlot
             label="Обе стороны"
             value={
               wall.materials?.pos?.assetId === wall.materials?.neg?.assetId
@@ -1665,8 +1753,9 @@ export function PropertiesPanel() {
             }
             onChange={(ref) => setWallBothMaterials(wall.id, ref)}
             onClear={() => setWallBothMaterials(wall.id, null)}
+            onCommit={() => pushHistory()}
           />
-          <MaterialSlot
+          <CoveringSlot
             label={
               wallSideRooms.pos
                 ? `Сторона + (комната)`
@@ -1675,8 +1764,9 @@ export function PropertiesPanel() {
             value={wall.materials?.pos}
             onChange={(ref) => setWallSideMaterial(wall.id, 'pos', ref)}
             onClear={() => setWallSideMaterial(wall.id, 'pos', null)}
+            onCommit={() => pushHistory()}
           />
-          <MaterialSlot
+          <CoveringSlot
             label={
               wallSideRooms.neg
                 ? `Сторона − (комната)`
@@ -1685,12 +1775,14 @@ export function PropertiesPanel() {
             value={wall.materials?.neg}
             onChange={(ref) => setWallSideMaterial(wall.id, 'neg', ref)}
             onClear={() => setWallSideMaterial(wall.id, 'neg', null)}
+            onCommit={() => pushHistory()}
           />
-          <MaterialSlot
+          <CoveringSlot
             label="Срезы (торцы и проёмы)"
             value={wall.materials?.cut}
             onChange={(ref) => setWallCutMaterial(wall.id, ref)}
             onClear={() => setWallCutMaterial(wall.id, null)}
+            onCommit={() => pushHistory()}
           />
           <p className="muted">
             Срезы — свободные торцы стены и грани вырезов (дверь, окно, проём).
@@ -1702,13 +1794,14 @@ export function PropertiesPanel() {
         <section className="prop-section">
           <h3>Комната</h3>
           <p className="muted">Стен в контуре: {room.wallIds.length}</p>
-          <MaterialSlot
+          <CoveringSlot
             label="Пол"
             value={floor.roomFloorMaterials?.[room.key]}
             onChange={(ref) => setRoomFloorMaterial(room.key, ref)}
             onClear={() => setRoomFloorMaterial(room.key, null)}
+            onCommit={() => pushHistory()}
           />
-          <MaterialSlot
+          <CoveringSlot
             label="Все стены (внутренняя сторона)"
             value={null}
             applyOnly
@@ -1719,6 +1812,20 @@ export function PropertiesPanel() {
             «Все стены» задаёт текстуру на внутреннюю сторону каждой стены
             контура. Стороны соседних комнат не затираются.
           </p>
+        </section>
+      )}
+
+      {isPaint && floorOpening && floorOpeningKey && (
+        <section className="prop-section">
+          <h3>Пол в проёме</h3>
+          <p className="muted">{openingKindLabel(floorOpening.kind)}</p>
+          <CoveringSlot
+            label="Пол"
+            value={floor.roomFloorMaterials?.[floorOpeningKey]}
+            onChange={(ref) => setRoomFloorMaterial(floorOpeningKey, ref)}
+            onClear={() => setRoomFloorMaterial(floorOpeningKey, null)}
+            onCommit={() => pushHistory()}
+          />
         </section>
       )}
 
@@ -2056,7 +2163,7 @@ export function PropertiesPanel() {
         !vertexDistancePair &&
         !pointOnWallPair && (
         <p className="muted">
-          Выберите стену, вершину, проём, короб, вырез, объект или пол.
+          Выберите стену, вершину, проём, короб, вырез или пол.
           Инструмент «Короб» (K) — объём, «Вырез» (C) — отверстие в коробе.
           Shift+клик — несколько.
         </p>

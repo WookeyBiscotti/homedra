@@ -13,14 +13,16 @@ function PlantInstance({
   plant,
   groundY,
   selected,
+  month,
 }: {
   plant: LandscapePlant
   groundY: number
   selected: boolean
+  month: number
 }) {
   const mesh = useMemo(
-    () => growPlant(plant.species, plant.seed, plant.shape),
-    [plant.species, plant.seed, plant.shape],
+    () => growPlant(plant.species, plant.seed, plant.shape, month),
+    [plant.species, plant.seed, plant.shape, month],
   )
   const terrain = useBuildingStore(
     (s) => s.building.floors.find((f) => f.kind === 'ground')?.landscapeTerrain,
@@ -89,6 +91,7 @@ export function LandscapePlants({ shadowsEnabled }: { shadowsEnabled: boolean })
   )
   const selection = useBuildingStore((s) => s.selection)
   const sceneMode = useBuildingStore((s) => s.sceneMode)
+  const month = useBuildingStore((s) => s.landscapeMonth)
   const list = plants ?? []
 
   useFrame(({ clock }) => {
@@ -106,6 +109,7 @@ export function LandscapePlants({ shadowsEnabled }: { shadowsEnabled: boolean })
           key={p.id}
           plant={p}
           groundY={groundY}
+          month={month}
           selected={selection?.kind === 'plant' && selection.id === p.id}
         />
       ))}

@@ -1,6 +1,7 @@
 import { Canvas, useThree } from '@react-three/fiber'
 import {
   ContactShadows,
+  Edges,
   Environment,
   Lightformer,
   OrbitControls,
@@ -27,13 +28,14 @@ import { resolveFloorRegionMaterial } from '../../engine/geometry/floorPlates'
 import { floorSlabOpeningHoles } from '../../engine/geometry/slabOpenings'
 import {
   buildRoomFloorGeometry,
-  buildWallFaceGeometry,
   FLOOR_FINISH_Y_OFFSET,
 } from '../../engine/geometry/wallFaces'
+import { buildSlabOpeningCutGeometry } from '../../engine/geometry/wallCuts'
 import {
-  buildSlabOpeningCutGeometry,
-  buildWallCutGeometry,
-} from '../../engine/geometry/wallCuts'
+  buildWallSolidPaintParts,
+  wallSolidPartMaterial,
+  type WallSolidPart,
+} from '../../engine/geometry/wallSolidPaint'
 import {
   isFloorRendered,
   isMepDrawTool,
@@ -43,15 +45,19 @@ import {
   normalizeFloorVisibility,
   sunDirection,
   type FloorVisibility,
-  type MaterialRef,
-  type WallSide,
+
 } from '../../engine/types'
 import { useBuildingEqual, useBuildingStore } from '../../store/buildingStore'
 import * as THREE from 'three'
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
+
+import { LandscapeMonthSlider } from './LandscapeMonthSlider'
 import { LightingPanel } from './LightingPanel'
 import { OpeningPickables } from './OpeningPickables'
-import { PaintPickables, disableRaycast } from './PaintPickables'
+import {
+  PaintPickables,
+  disableRaycast,
+  makeWallPaintRaycast,
+} from './PaintPickables'
 import { PbrStandardMaterial } from './PbrStandardMaterial'
 import { VisitControls, type VisitActiveState } from './VisitControls'
 import { WallPickables } from './WallPickables'
@@ -62,6 +68,7 @@ import { MepNetworks } from './MepNetworks'
 import { TerrainGround } from './TerrainGround'
 import { LandscapePlants } from './LandscapePlants'
 import { LandscapeGrass } from './LandscapeGrass'
+import { SiteLayoutGizmo } from './SiteLayoutGizmo'
 import { heightAt, shouldShowOutdoorLandscape } from '../../landscape/terrain'
 
 /**
@@ -185,13 +192,15 @@ function pickPriority(kind: string | undefined): number {
   }
 }
 
-/** Paint: only paintTarget. Otherwise prefer objects/openings over wall volumes. */
+/** Paint: only paintTarget. Objects are pickable only in furnish. */
 function PointerEventFilter({
   painting,
   tiling,
+  furnish,
 }: {
   painting: boolean
   tiling: boolean
+  furnish: boolean
 }) {
   const setEvents = useThree((s) => s.setEvents)
   useEffect(() => {
@@ -206,8 +215,11 @@ function PointerEventFilter({
     } else {
       setEvents({
         filter: (hits) => {
-          if (hits.length < 2) return hits
-          return [...hits].sort((a, b) => {
+          const usable = furnish
+            ? hits
+            : hits.filter((h) => pickKindOf(h.object) !== 'object')
+          if (usable.length < 2) return usable
+          return [...usable].sort((a, b) => {
             const pa = pickPriority(pickKindOf(a.object))
             const pb = pickPriority(pickKindOf(b.object))
             if (pa !== pb && Math.abs(a.distance - b.distance) < 0.4) {
@@ -219,9 +231,11 @@ function PointerEventFilter({
       })
     }
     return () => setEvents({ filter: (hits) => hits })
-  }, [painting, tiling, setEvents])
+  }, [painting, tiling, furnish, setEvents])
   return null
 }
+
+const PAINT_HOVER = '#c45c26'
 
 function FloorWallSolidMesh({
   floorId,
@@ -230,7 +244,6 @@ function FloorWallSolidMesh({
   exterior,
   shadowsEnabled,
   ghost = false,
-  pickable = true,
 }: {
   floorId: string
   layers: Array<{
@@ -243,56 +256,42 @@ function FloorWallSolidMesh({
   exterior: boolean
   shadowsEnabled: boolean
   ghost?: boolean
-  pickable?: boolean
 }) {
-  const geometry = useMemo(() => {
-    if (layers.length === 0) return null
-    const geos: THREE.BufferGeometry[] = []
-    for (const layer of layers) {
-      for (let i = 0; i < layer.rings.length; i++) {
-        const ring = layer.rings[i]
-        if (ring.length < 3) continue
-        const shape = new THREE.Shape()
-        shape.moveTo(ring[0].x, ring[0].z)
-        for (let j = 1; j < ring.length; j++) {
-          shape.lineTo(ring[j].x, ring[j].z)
-        }
-        shape.closePath()
-        for (const hole of layer.holes[i] ?? []) {
-          if (hole.length < 3) continue
-          const path = new THREE.Path()
-          path.moveTo(hole[0].x, hole[0].z)
-          for (let j = 1; j < hole.length; j++) {
-            path.lineTo(hole[j].x, hole[j].z)
-          }
-          path.closePath()
-          shape.holes.push(path)
-        }
-        const geo = new THREE.ExtrudeGeometry(shape, {
-          depth: layer.height,
-          bevelEnabled: false,
-          curveSegments: 1,
-          steps: 1,
-        })
-        geo.rotateX(-Math.PI / 2)
-        geo.translate(0, layer.y, 0)
-        geos.push(geo)
-      }
-    }
-    if (geos.length === 0) return null
-    const merged = mergeGeometries(geos, false)
-    for (const g of geos) g.dispose()
-    return merged
-  }, [layers])
+  const floor = useBuildingEqual(
+    (s) => s.building.floors.find((f) => f.id === floorId),
+    (a, b) => {
+      if (a === b) return true
+      if (!a || !b) return a === b
+      return (
+        a.kind === b.kind &&
+        a.elevation === b.elevation &&
+        a.height === b.height &&
+        a.vertices === b.vertices &&
+        a.walls.length === b.walls.length &&
+        a.walls.every(
+          (w, i) =>
+            w.id === b.walls[i]?.id &&
+            w.a === b.walls[i]?.a &&
+            w.b === b.walls[i]?.b &&
+            w.thickness === b.walls[i]?.thickness,
+        ) &&
+        a.openings === b.openings
+      )
+    },
+  )
+
+  const parts = useMemo(() => {
+    if (!floor || !isStoryFloor(floor) || layers.length === 0) return []
+    return buildWallSolidPaintParts(floor, layers)
+  }, [floor, layers])
 
   useEffect(() => {
     return () => {
-      geometry?.dispose()
+      for (const part of parts) part.geometry.dispose()
     }
-  }, [geometry])
+  }, [parts])
 
   const isActive = floorId === activeFloorId
-  const opacity = ghost ? 0.28 : 1
   const color = exterior
     ? isActive
       ? '#6b8f71'
@@ -301,172 +300,143 @@ function FloorWallSolidMesh({
       ? '#d4c4a8'
       : '#b8a88c'
 
-  if (!geometry) return null
+  if (parts.length === 0) return null
+
+  return (
+    <group>
+      {parts.map((part) => (
+        <WallSolidPartMesh
+          key={part.key}
+          floorId={floorId}
+          part={part}
+          color={color}
+          ghost={ghost}
+          shadowsEnabled={shadowsEnabled}
+        />
+      ))}
+    </group>
+  )
+}
+
+function WallSolidPartMesh({
+  floorId,
+  part,
+  color,
+  ghost,
+  shadowsEnabled,
+}: {
+  floorId: string
+  part: WallSolidPart
+  color: string
+  ghost: boolean
+  shadowsEnabled: boolean
+}) {
+  const material = useBuildingStore((s) => {
+    if (!part.wallId || part.slot === 'body') return undefined
+    const wall = s.building.floors
+      .find((f) => f.id === floorId)
+      ?.walls.find((w) => w.id === part.wallId)
+    return wallSolidPartMaterial(wall, part.slot)
+  })
+  const painting = useBuildingStore((s) => s.sceneMode === 'paint')
+  const selected = useBuildingStore(
+    (s) =>
+      part.wallId != null &&
+      s.selection?.kind === 'wall' &&
+      s.selection.id === part.wallId,
+  )
+  const setWallSideMaterial = useBuildingStore((s) => s.setWallSideMaterial)
+  const setWallCutMaterial = useBuildingStore((s) => s.setWallCutMaterial)
+  const setSelection = useBuildingStore((s) => s.setSelection)
+  const setActiveFloor = useBuildingStore((s) => s.setActiveFloor)
+  const [hovered, setHovered] = useState(false)
+
+  const paintSide =
+    part.slot === 'pos' || part.slot === 'neg' ? part.slot : null
+  const live = painting && !ghost && part.slot !== 'body'
+  const floor = useBuildingStore((s) =>
+    live ? s.building.floors.find((f) => f.id === floorId) : undefined,
+  )
+  const wall = floor?.walls.find((w) => w.id === part.wallId)
+  const raycast = useMemo(() => {
+    if (!live || !floor || !wall || !paintSide) return undefined
+    return makeWallPaintRaycast(floor, wall, paintSide)
+  }, [live, floor, wall, paintSide])
+
+  const onClick = (e: ThreeEvent<MouseEvent>) => {
+    e.stopPropagation()
+    setActiveFloor(floorId)
+    if (part.wallId) setSelection({ kind: 'wall', id: part.wallId })
+    if (!part.wallId) return
+    const brush = useBuildingStore.getState().paintBrush
+    if (!brush && !e.altKey) return
+    const next = e.altKey ? null : brush
+    if (part.slot === 'cut') setWallCutMaterial(part.wallId, next)
+    else if (paintSide) setWallSideMaterial(part.wallId, paintSide, next)
+  }
+
+  const paintKind =
+    part.slot === 'cut' ? 'wall-cut' : part.slot === 'body' ? undefined : 'wall'
 
   return (
     <mesh
-      geometry={geometry}
+      geometry={part.geometry}
       castShadow={shadowsEnabled && !ghost}
       receiveShadow={shadowsEnabled && !ghost}
-      raycast={pickable ? undefined : disableRaycast}
-    >
-      <meshStandardMaterial
-        color={color}
-        transparent={ghost}
-        opacity={opacity}
-        depthWrite={!ghost}
-        roughness={0.78}
-        metalness={0.04}
-        envMapIntensity={0.35}
-        side={THREE.DoubleSide}
-      />
-    </mesh>
-  )
-}
-
-function WallFaceMesh({
-  floorId,
-  wallId,
-  side,
-  geometry,
-  material,
-  selected,
-  dimmed,
-}: {
-  floorId: string
-  wallId: string
-  side: WallSide
-  geometry: THREE.BufferGeometry
-  material?: MaterialRef | null
-  selected: boolean
-  dimmed: boolean
-}) {
-  const sceneMode = useBuildingStore((s) => s.sceneMode)
-  const setSelection = useBuildingStore((s) => s.setSelection)
-  const setActiveFloor = useBuildingStore((s) => s.setActiveFloor)
-  const painting = sceneMode === 'paint'
-  const placing = useBuildingStore(
-    (s) => s.tool === 'placeObject' && s.pendingModel != null,
-  )
-  const routing = useBuildingStore(
-    (s) => isMepDrawTool(s.tool) || isMepFixtureTool(s.tool),
-  )
-  const landscaping = useBuildingStore((s) => s.workbench === 'landscape')
-  const blockHits = painting || placing || routing || landscaping
-
-  const onClick = (e: ThreeEvent<MouseEvent>) => {
-    e.stopPropagation()
-    setActiveFloor(floorId)
-    setSelection({ kind: 'wall', id: wallId })
-  }
-
-  return (
-    <mesh
-      geometry={geometry}
-      // In paint/place mode only dedicated pickables receive hits
-      raycast={blockHits ? disableRaycast : undefined}
-      onClick={blockHits ? undefined : onClick}
+      raycast={live ? raycast : disableRaycast}
+      onClick={live ? onClick : undefined}
       onPointerOver={
-        blockHits
-          ? undefined
-          : (e) => {
+        live
+          ? (e) => {
               e.stopPropagation()
-              document.body.style.cursor = 'pointer'
+              setHovered(true)
+              const brush = useBuildingStore.getState().paintBrush
+              document.body.style.cursor =
+                brush || e.altKey ? 'crosshair' : 'pointer'
             }
+          : undefined
       }
       onPointerOut={
-        blockHits
-          ? undefined
-          : () => {
+        live
+          ? () => {
+              setHovered(false)
               document.body.style.cursor = 'default'
             }
+          : undefined
       }
-      userData={{ wallId, side, pickKind: 'wall' }}
-      renderOrder={3}
+      userData={{
+        wallId: part.wallId,
+        side: paintSide,
+        pickKind: part.slot === 'body' ? undefined : 'wall',
+        paintTarget: live,
+        paintKind,
+      }}
     >
-      <PbrStandardMaterial
-        material={material}
-        color={selected ? '#e8d4b8' : '#d4c4a8'}
-        transparent={dimmed}
-        opacity={dimmed ? 0.4 : 1}
-        side={THREE.FrontSide}
-        meterUvs
-        polygonOffset
-        polygonOffsetFactor={-1}
-        polygonOffsetUnits={-1}
-      />
-    </mesh>
-  )
-}
-
-function WallCutMesh({
-  floorId,
-  wallId,
-  geometry,
-  material,
-  selected,
-  dimmed,
-}: {
-  floorId: string
-  wallId: string
-  geometry: THREE.BufferGeometry
-  material?: MaterialRef | null
-  selected: boolean
-  dimmed: boolean
-}) {
-  const sceneMode = useBuildingStore((s) => s.sceneMode)
-  const setSelection = useBuildingStore((s) => s.setSelection)
-  const setActiveFloor = useBuildingStore((s) => s.setActiveFloor)
-  const painting = sceneMode === 'paint'
-  const placing = useBuildingStore(
-    (s) => s.tool === 'placeObject' && s.pendingModel != null,
-  )
-  const routing = useBuildingStore(
-    (s) => isMepDrawTool(s.tool) || isMepFixtureTool(s.tool),
-  )
-  const landscaping = useBuildingStore((s) => s.workbench === 'landscape')
-  const blockHits = painting || placing || routing || landscaping
-
-  const onClick = (e: ThreeEvent<MouseEvent>) => {
-    e.stopPropagation()
-    setActiveFloor(floorId)
-    setSelection({ kind: 'wall', id: wallId })
-  }
-
-  return (
-    <mesh
-      geometry={geometry}
-      raycast={blockHits ? disableRaycast : undefined}
-      onClick={blockHits ? undefined : onClick}
-      onPointerOver={
-        blockHits
-          ? undefined
-          : (e) => {
-              e.stopPropagation()
-              document.body.style.cursor = 'pointer'
-            }
-      }
-      onPointerOut={
-        blockHits
-          ? undefined
-          : () => {
-              document.body.style.cursor = 'default'
-            }
-      }
-      userData={{ wallId, paintKind: 'wall-cut', pickKind: 'wall' }}
-      renderOrder={3}
-    >
-      <PbrStandardMaterial
-        material={material}
-        color={selected ? '#e8d4b8' : '#d4c4a8'}
-        transparent={dimmed}
-        opacity={dimmed ? 0.4 : 1}
-        side={THREE.FrontSide}
-        meterUvs
-        polygonOffset
-        polygonOffsetFactor={-1}
-        polygonOffsetUnits={-1}
-      />
+      {part.slot === 'body' || !material ? (
+        <meshStandardMaterial
+          color={hovered ? PAINT_HOVER : selected ? '#e8d4b8' : color}
+          transparent={ghost}
+          opacity={ghost ? 0.28 : 1}
+          depthWrite={!ghost}
+          roughness={0.78}
+          metalness={0.04}
+          envMapIntensity={0.35}
+          side={THREE.FrontSide}
+        />
+      ) : (
+        <PbrStandardMaterial
+          material={material}
+          color={hovered ? PAINT_HOVER : selected ? '#e8d4b8' : color}
+          transparent={ghost}
+          opacity={ghost ? 0.4 : 1}
+          side={THREE.FrontSide}
+          meterUvs
+          vertexDisplacement={false}
+        />
+      )}
+      {hovered && (
+        <Edges threshold={15} color={PAINT_HOVER} scale={1.002} />
+      )}
     </mesh>
   )
 }
@@ -511,70 +481,6 @@ function FloorFinishes({
   )
   const landscaping = useBuildingStore((s) => s.workbench === 'landscape')
   const blockHits = painting || placing || routing || landscaping
-
-  const wallFaces = useMemo(() => {
-    if (!floor || !isStoryFloor(floor)) return []
-    const items: Array<{
-      key: string
-      wallId: string
-      side: WallSide
-      geo: THREE.BufferGeometry
-      material: NonNullable<
-        NonNullable<(typeof floor.walls)[0]['materials']>['pos']
-      >
-    }> = []
-    for (const wall of floor.walls) {
-      for (const side of ['pos', 'neg'] as WallSide[]) {
-        const mat = wall.materials?.[side]
-        if (!mat) continue
-        const geo = buildWallFaceGeometry(floor, wall, side)
-        if (!geo) continue
-        items.push({
-          key: `${wall.id}-${side}`,
-          wallId: wall.id,
-          side,
-          geo,
-          material: mat,
-        })
-      }
-    }
-    return items
-    // Object / plant edits replace `floor` but keep wall topology.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- structural fields only
-  }, [
-    floor?.kind,
-    floor?.elevation,
-    floor?.height,
-    floor?.vertices,
-    floor?.walls,
-    floor?.openings,
-  ])
-
-  const wallCuts = useMemo(() => {
-    if (!floor || !isStoryFloor(floor)) return []
-    const items: Array<{
-      key: string
-      wallId: string
-      geo: THREE.BufferGeometry
-      material: NonNullable<
-        NonNullable<(typeof floor.walls)[0]['materials']>['cut']
-      >
-    }> = []
-    for (const wall of floor.walls) {
-      const mat = wall.materials?.cut
-      if (!mat) continue
-      const geo = buildWallCutGeometry(floor, wall)
-      if (!geo) continue
-      items.push({
-        key: `${wall.id}-cut`,
-        wallId: wall.id,
-        geo,
-        material: mat,
-      })
-    }
-    return items
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- structural fields only
-  }, [floor?.kind, floor?.elevation, floor?.height, floor?.vertices, floor?.walls, floor?.openings])
 
   const slabCuts = useMemo(() => {
     if (!floor || !isStoryFloor(floor)) return []
@@ -640,45 +546,16 @@ function FloorFinishes({
 
   useEffect(() => {
     return () => {
-      for (const item of wallFaces) item.geo.dispose()
-      for (const item of wallCuts) item.geo.dispose()
       for (const item of slabCuts) item.geo.dispose()
       for (const item of roomFloors) item.geo.dispose()
     }
-  }, [wallFaces, wallCuts, slabCuts, roomFloors])
+  }, [slabCuts, roomFloors])
 
   if (!floor) return null
   const dimmed = ghost
 
   return (
     <>
-      {wallFaces.map((item) => (
-        <WallFaceMesh
-          key={item.key}
-          floorId={floorId}
-          wallId={item.wallId}
-          side={item.side}
-          geometry={item.geo}
-          material={item.material}
-          selected={
-            selection?.kind === 'wall' && selection.id === item.wallId
-          }
-          dimmed={dimmed}
-        />
-      ))}
-      {wallCuts.map((item) => (
-        <WallCutMesh
-          key={item.key}
-          floorId={floorId}
-          wallId={item.wallId}
-          geometry={item.geo}
-          material={item.material}
-          selected={
-            selection?.kind === 'wall' && selection.id === item.wallId
-          }
-          dimmed={dimmed}
-        />
-      ))}
       {slabCuts.map((item) => (
         <mesh
           key={item.key}
@@ -726,6 +603,7 @@ function FloorFinishes({
             polygonOffset
             polygonOffsetFactor={-1}
             polygonOffsetUnits={-1}
+            vertexDisplacement={false}
           />
         </mesh>
       ))}
@@ -768,6 +646,7 @@ function FloorFinishes({
             opacity={dimmed ? 0.45 : 1}
             side={THREE.DoubleSide}
             meterUvs
+            vertexDisplacement={false}
           />
         </mesh>
       ))}
@@ -973,6 +852,7 @@ function SceneContent({
   const sceneMode = useBuildingStore((s) => s.sceneMode)
   const lighting = useBuildingStore((s) => s.lighting)
   const transformDragging = useBuildingStore((s) => s.transformDragging)
+  const siteHousePreview = useBuildingStore((s) => s.siteHousePreview)
   const pendingModel = useBuildingStore((s) => s.pendingModel)
   const tool = useBuildingStore((s) => s.tool)
   const workbench = useBuildingStore((s) => s.workbench)
@@ -1051,6 +931,7 @@ function SceneContent({
     workbench,
     activeFloorKind: activeFloor?.kind,
   })
+  
   const floorY = activeFloor?.kind === 'ground'
     ? groundY
     : (activeFloor?.elevation ?? groundY)
@@ -1063,6 +944,11 @@ function SceneContent({
     -planCenterZ,
   ]
   const spawn: [number, number, number] = [center[0], floorY, center[2]]
+  const terrain = groundFloor?.landscapeTerrain
+  const visitHeightAtWorld = useMemo(() => {
+    if (activeFloor?.kind !== 'ground') return undefined
+    return (x: number, z: number) => groundY + heightAt(terrain, x, -z)
+  }, [activeFloor?.kind, groundY, terrain])
 
   const span = Math.max(
     bounds.maxX - bounds.minX,
@@ -1092,7 +978,11 @@ function SceneContent({
   return (
     <>
       <ToneMappingSetup exposure={lighting.exposure} />
-      <PointerEventFilter painting={painting} tiling={tilingLay} />
+      <PointerEventFilter
+        painting={painting}
+        tiling={tilingLay}
+        furnish={workbench === 'furnish'}
+      />
       <color attach="background" args={[lighting.skyColor]} />
       <fog attach="fog" args={[lighting.skyColor, 40, 110]} />
 
@@ -1124,7 +1014,11 @@ function SceneContent({
           pickable={!painting && !routing}
         />
       )}
-      {showOutdoorLandscape && <LandscapeGrass visit={visit} />}
+      {showOutdoorLandscape && (
+        <Suspense fallback={null}>
+          <LandscapeGrass visit={visit} />
+        </Suspense>
+      )}
       {showOutdoorLandscape && (
         <LandscapePlants shadowsEnabled={lighting.shadowsEnabled} />
       )}
@@ -1134,6 +1028,7 @@ function SceneContent({
           shadowsEnabled={lighting.shadowsEnabled}
         />
       )}
+      {!visit && landscaping && <SiteLayoutGizmo />}
 
       {lighting.contactShadows && showOutdoorLandscape && (
         <ContactShadows
@@ -1148,7 +1043,13 @@ function SceneContent({
         />
       )}
 
-      <group>
+      <group
+        position={[
+          siteHousePreview?.dx ?? 0,
+          0,
+          -(siteHousePreview?.dy ?? 0),
+        ]}
+      >
         {visibleFloors.map((f) => {
           const floorData = building.floors.find((fl) => fl.id === f.floorId)
           const ghost = visibilityByFloor.get(f.floorId) === 'ghost'
@@ -1161,7 +1062,6 @@ function SceneContent({
               exterior={finishExterior}
               shadowsEnabled={lighting.shadowsEnabled}
               ghost={ghost}
-              pickable={!painting && !placing && !routing && !landscaping && !tilingLay}
             />
             <FloorFinishes
               floorId={f.floorId}
@@ -1245,15 +1145,16 @@ function SceneContent({
         {tilingLay && activeFloor && activeFloor.kind !== 'ground' && (
           <TileLayPickables floor={activeFloor} />
         )}
+        {tilingLay && activeFloor && activeFloor.kind !== 'ground' && (
+          <TileLayPickables floor={activeFloor} />
+        )}
       </group>
 
       {visit ? (
         <VisitControls
           spawn={spawn}
           floorY={floorY}
-          heightAtWorld={(x, z) =>
-            groundY + heightAt(groundFloor?.landscapeTerrain, x, -z)
-          }
+          heightAtWorld={visitHeightAtWorld}
           onActiveChange={onVisitActiveChange}
         />
       ) : (
@@ -1347,6 +1248,7 @@ export function BuildingScene() {
         </div>
       )}
       <LightingPanel />
+      <LandscapeMonthSlider />
       <div
         className="view3d-body"
         onContextMenu={(e) => e.preventDefault()}
@@ -1354,7 +1256,10 @@ export function BuildingScene() {
         {sceneMode === 'visit' && !visitActive.pointerLocked && (
           <div className="visit-hint visit-hint-shooter">
             <strong>Кликните для захвата мыши</strong>
-            <span>Мышь — обзор · WASD — ходьба · Shift — бег · Esc — выход</span>
+            <span>
+              Мышь — обзор · WASD — ходьба · Пробел — этаж выше · Shift — этаж
+              ниже · Esc — выход
+            </span>
             <span className="visit-hint-note">
               На Hyprland, если курсор упирается в край: Chromium через X11
               (`chromium --ozone-platform=x11`) или браузер в XWayland

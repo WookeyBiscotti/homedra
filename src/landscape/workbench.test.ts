@@ -50,6 +50,25 @@ describe('landscape workbench', () => {
     expect(s.sceneMode).toBe('exterior')
     expect(isGroundFloor(s.activeFloor())).toBe(true)
     expect(s.activeFloor().landscapeTerrain?.resolution).toBe(128)
+    expect(s.landscapeMonth).toBe(6)
+  })
+
+  it('keeps landscape workbench on the 2D site plan', () => {
+    useBuildingStore.getState().setWorkbench('landscape')
+    useBuildingStore.getState().setViewMode('2d')
+    const s = useBuildingStore.getState()
+    expect(s.workbench).toBe('landscape')
+    expect(s.viewMode).toBe('2d')
+  })
+
+  it('clamps the landscape month slider', () => {
+    useBuildingStore.getState().setWorkbench('landscape')
+    useBuildingStore.getState().setLandscapeMonth(5)
+    expect(useBuildingStore.getState().landscapeMonth).toBe(5)
+    useBuildingStore.getState().setLandscapeMonth(0)
+    expect(useBuildingStore.getState().landscapeMonth).toBe(1)
+    useBuildingStore.getState().setLandscapeMonth(99)
+    expect(useBuildingStore.getState().landscapeMonth).toBe(12)
   })
 
   it('places a plant on the ground', () => {
@@ -95,10 +114,69 @@ describe('landscape workbench', () => {
     expect(g?.plants ?? []).toHaveLength(0)
   })
 
+  it('drags a plant on the landscape plan and skips the house', () => {
+    useBuildingStore.getState().setWorkbench('landscape')
+    useBuildingStore.getState().setPendingPlant('cultivatedApple', 1)
+    useBuildingStore.getState().placePlantAt(-4, -3)
+    const id = useBuildingStore
+      .getState()
+      .building.floors.find(isGroundFloor)?.plants?.[0]?.id
+    expect(id).toBeTruthy()
+    useBuildingStore.getState().dragPlant(id!, -6, -5)
+    const moved = useBuildingStore
+      .getState()
+      .building.floors.find(isGroundFloor)?.plants?.[0]
+    expect(moved?.x).toBe(-6)
+    expect(moved?.y).toBe(-5)
+    useBuildingStore.getState().dragPlant(id!, 2, 2)
+    const blocked = useBuildingStore
+      .getState()
+      .building.floors.find(isGroundFloor)?.plants?.[0]
+    expect(blocked?.x).toBe(-6)
+    expect(blocked?.y).toBe(-5)
+    useBuildingStore.getState().dragPlant(id!, Number.NaN, -5)
+    expect(
+      useBuildingStore.getState().building.floors.find(isGroundFloor)
+        ?.plants?.[0]?.x,
+    ).toBe(-6)
+  })
+
   it('keeps placeObject on the landscape workbench', () => {
     useBuildingStore.getState().setWorkbench('landscape')
     useBuildingStore.getState().setTool('placeObject')
     expect(useBuildingStore.getState().workbench).toBe('landscape')
     expect(useBuildingStore.getState().tool).toBe('placeObject')
+  })
+
+  it('resizes the plot without moving the house', () => {
+    useBuildingStore.getState().setWorkbench('landscape')
+    const before = useBuildingStore.getState().activeFloor()
+    const story = useBuildingStore
+      .getState()
+      .building.floors.find(isStoryFloor)!
+    const x0 = story.vertices[0]?.x
+    useBuildingStore.getState().setLandscapePlot({ sizeX: 28, sizeY: 22 })
+    const g = useBuildingStore.getState().building.floors.find(isGroundFloor)
+    expect(g?.landscapeTerrain?.size).toBe(28)
+    expect(g?.landscapeTerrain?.sizeY).toBe(22)
+    const after = useBuildingStore
+      .getState()
+      .building.floors.find(isStoryFloor)!
+    expect(after.vertices[0]?.x).toBe(x0)
+    expect(before).toBeTruthy()
+  })
+
+  it('slides the house on the plot and leaves plants', () => {
+    useBuildingStore.getState().setWorkbench('landscape')
+    useBuildingStore.getState().setPendingPlant('cultivatedApple', 1)
+    useBuildingStore.getState().placePlantAt(-4, -3)
+    useBuildingStore.getState().setHouseOffsetOnPlot(2, -1)
+    const s = useBuildingStore.getState()
+    const story = s.building.floors.find(isStoryFloor)!
+    expect(story.vertices[0]?.x).toBeCloseTo(2, 5)
+    expect(story.vertices[0]?.y).toBeCloseTo(-1, 5)
+    const g = s.building.floors.find(isGroundFloor)
+    expect(g?.plants?.[0]?.x).toBe(-4)
+    expect(g?.plants?.[0]?.y).toBe(-3)
   })
 })

@@ -65,6 +65,15 @@ describe('copySelectedObject', () => {
     expect(useBuildingStore.getState().statusMessage).toBe('Объект скопирован')
   })
 
+  it('does nothing outside Objects mode', () => {
+    useBuildingStore.setState({ workbench: 'draft' })
+    useBuildingStore.getState().copySelectedObject()
+    expect(useBuildingStore.getState().activeFloor().objects).toHaveLength(1)
+    expect(useBuildingStore.getState().statusMessage).toBe(
+      'Копировать объект можно только в режиме «Объекты».',
+    )
+  })
+
   it('does nothing when nothing is selected', () => {
     useBuildingStore.setState({ selection: null })
     useBuildingStore.getState().copySelectedObject()

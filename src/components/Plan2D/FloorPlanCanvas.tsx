@@ -40,8 +40,16 @@ import {
   joinedWallFootprint,
 } from '../../engine/geometry/wallSolid'
 import { planHalfSizeOf } from '../../engine/geometry/objectSnap'
-import { hitFloorTile, tileLocalPolygon, tileLocalRect } from '../../engine/geometry/tiles'
+import { plantPlanAabbSide } from '../../landscape/plantAabb'
+import { housePlanOutline, plotFrame, plotRect } from '../../landscape/site'
+import { speciesByKey } from '../../landscape/species'
+import {
+  hitFloorTile,
+  tileLocalPolygon,
+  tileLocalRect,
+} from '../../engine/geometry/tiles'
 import { useMaterialHtmlImage } from '../TileThumb'
+import { cropImageToCanvas } from '../../materials/cropImage'
 import { fillTilesOnSurface, layoutTile } from '../../engine/geometry/tileFill'
 import {
   isFloorPlateSelected,
@@ -62,6 +70,7 @@ import {
   isWallOpeningTool,
   isWallSelected,
   selectedVertexIds,
+  isFullTexRegion,
   normalizeTileTexRegion,
   type Floor,
   type Opening,
@@ -92,6 +101,7 @@ type ViewOrigin = { x: number; y: number }
 function contentCenter(
   floor: Floor,
   lower: Floor | null,
+  extra: Array<{ x: number; y: number }> = [],
 ): { cx: number; cy: number } {
   const verts = [...floor.vertices, ...(lower?.vertices ?? [])]
   const platePts: Array<{ x: number; y: number }> = []
@@ -108,7 +118,7 @@ function contentCenter(
       { x: p.x + hw, y: p.y + hd },
     )
   }
-  const all = [...verts, ...platePts]
+  const all = [...verts, ...platePts, ...extra]
   if (!all.length) return { cx: 3, cy: 2 }
   const xs = all.map((v) => v.x)
   const ys = all.map((v) => v.y)
@@ -143,18 +153,25 @@ function tilePatternProps(
   const h = Math.abs(b.y - a.y)
   if (w < 1 || h < 1) return {}
   const region = normalizeTileTexRegion(tile.texRegion)
-  const du = Math.max(0.04, region.u1 - region.u0)
-  const dv = Math.max(0.04, region.v1 - region.v0)
-  const scaleX = w / (image.width * du)
-  const scaleY = h / (image.height * dv)
+  const stamp = isFullTexRegion(region)
+    ? image
+    : (cropImageToCanvas(image, region) ?? image)
+  const tileW = Math.max(1e-4, r.maxU - r.minU)
   const originX = Math.min(a.x, b.x)
   const originY = Math.min(a.y, b.y)
+  const ppmX = w / tileW
+  const ppmY = h / Math.max(1e-4, r.maxV - r.minV)
+  const aspect = stamp.width / stamp.height
+  const cellW = tileW
+  const cellH = tileW / aspect
+  const scaleX = (ppmX * cellW) / stamp.width
+  const scaleY = (ppmY * cellH) / stamp.height
   return {
     fill: '#ffffff',
     fillPriority: 'pattern' as const,
-    fillPatternImage: image,
-    fillPatternX: originX - region.u0 * image.width * scaleX,
-    fillPatternY: originY - region.v0 * image.height * scaleY,
+    fillPatternImage: stamp,
+    fillPatternX: originX,
+    fillPatternY: originY,
     fillPatternScaleX: scaleX,
     fillPatternScaleY: scaleY,
   }
@@ -280,6 +297,7 @@ export function FloorPlanCanvas() {
   const [lengthEdit, setLengthEdit] = useState<LengthEdit | null>(null)
   const marqueeActive = useRef(false)
   const panActive = useRef(false)
+  const panMoved = useRef(false)
   const panLast = useRef<{ x: number; y: number } | null>(null)
   const spaceDown = useRef(false)
   const viewFitted = useRef(false)
@@ -299,6 +317,10 @@ export function FloorPlanCanvas() {
   const activeFloorId = useBuildingStore((s) => s.activeFloorId)
   const floor = useBuildingStore((s) => s.activeFloor())
   const workbench = useBuildingStore((s) => s.workbench)
+  const landscapeMonth = useBuildingStore((s) => s.landscapeMonth)
+  const groundPlants = useBuildingStore(
+    (s) => s.building.floors.find((f) => f.kind === 'ground')?.plants,
+  )
   const tool = useBuildingStore((s) => s.tool)
   const selection = useBuildingStore((s) => s.selection)
   const wallDraftFrom = useBuildingStore((s) => s.wallDraftFrom)
@@ -331,6 +353,8 @@ export function FloorPlanCanvas() {
   const finishVolumeCutout = useBuildingStore((s) => s.finishVolumeCutout)
   const dragVolumeCutout = useBuildingStore((s) => s.dragVolumeCutout)
   const placeObjectAt = useBuildingStore((s) => s.placeObjectAt)
+  const placePlantAt = useBuildingStore((s) => s.placePlantAt)
+  const dragPlant = useBuildingStore((s) => s.dragPlant)
   const placeTileOnHit = useBuildingStore((s) => s.placeTileOnHit)
   const fillTilesOnHit = useBuildingStore((s) => s.fillTilesOnHit)
   const dragTile = useBuildingStore((s) => s.dragTile)
@@ -403,6 +427,13 @@ export function FloorPlanCanvas() {
     moved: boolean
   } | null>(null)
   const objectMoveMoved = useRef(false)
+  const plantMove = useRef<{
+    id: string
+    start: { x: number; y: number }
+    origin: { x: number; y: number }
+    moved: boolean
+  } | null>(null)
+  const plantMoveMoved = useRef(false)
   const tileMove = useRef<{
     id: string
     ids: string[]
@@ -421,6 +452,17 @@ export function FloorPlanCanvas() {
     return prev
   }, [building.floors, activeFloorId])
 
+  const houseOutline = useMemo(
+    () => (workbench === 'landscape' ? housePlanOutline(building) : []),
+    [workbench, building],
+  )
+  const plotOutline = useMemo(() => {
+    if (workbench !== 'landscape') return null
+    const terrain = building.floors.find((f) => f.kind === 'ground')
+      ?.landscapeTerrain
+    return plotRect(plotFrame(terrain))
+  }, [workbench, building])
+
   const tileGhosts = useMemo(() => {
     if (!pointer || !pendingTile) return []
     if (tool === 'fillTile') {
@@ -433,7 +475,8 @@ export function FloorPlanCanvas() {
         tileRotation,
         tileFillPattern,
         floor,
-      ).slice(0, 200)
+        { limit: 200, snap: tileSnapEnabled },
+      )
     }
     if (tool === 'placeTile') {
       const tile = layoutTile(
@@ -462,7 +505,16 @@ export function FloorPlanCanvas() {
 
   const fitView = useCallback(
     (nextScale = DEFAULT_SCALE) => {
-      const { cx, cy } = contentCenter(floor, lowerFloor)
+      const extra = [
+        ...houseOutline.flat(),
+        ...(plotOutline
+          ? [
+              { x: plotOutline.minX, y: plotOutline.minY },
+              { x: plotOutline.maxX, y: plotOutline.maxY },
+            ]
+          : []),
+      ]
+      const { cx, cy } = contentCenter(floor, lowerFloor, extra)
       const s = Math.min(MAX_SCALE, Math.max(MIN_SCALE, nextScale))
       setScale(s)
       setOrigin({
@@ -470,7 +522,7 @@ export function FloorPlanCanvas() {
         y: size.h / 2 + cy * s,
       })
     },
-    [floor, lowerFloor, size],
+    [floor, lowerFloor, houseOutline, plotOutline, size],
   )
 
   useEffect(() => {
@@ -487,7 +539,7 @@ export function FloorPlanCanvas() {
   // Fit once when size is ready / floor switches
   useEffect(() => {
     viewFitted.current = false
-  }, [activeFloorId])
+  }, [activeFloorId, workbench])
 
   useEffect(() => {
     if (size.w < 10 || size.h < 10) return
@@ -598,6 +650,7 @@ export function FloorPlanCanvas() {
     if (isPan) {
       evt.preventDefault()
       panActive.current = true
+      panMoved.current = false
       panLast.current = { x: evt.clientX, y: evt.clientY }
       marqueeActive.current = false
       setMarquee(null)
@@ -667,6 +720,7 @@ export function FloorPlanCanvas() {
       const dx = e.evt.clientX - panLast.current.x
       const dy = e.evt.clientY - panLast.current.y
       panLast.current = { x: e.evt.clientX, y: e.evt.clientY }
+      if (dx !== 0 || dy !== 0) panMoved.current = true
       setOrigin((o) => ({ x: o.x + dx, y: o.y + dy }))
       return
     }
@@ -792,6 +846,20 @@ export function FloorPlanCanvas() {
       return
     }
 
+    if (plantMove.current) {
+      const drag = plantMove.current
+      const dx = w.x - drag.start.x
+      const dy = w.y - drag.start.y
+      if (!Number.isFinite(dx) || !Number.isFinite(dy)) return
+      if (!drag.moved && Math.hypot(dx, dy) < 0.02) return
+      if (!drag.moved) {
+        drag.moved = true
+        pushHistory()
+      }
+      dragPlant(drag.id, drag.origin.x + dx, drag.origin.y + dy)
+      return
+    }
+
     if (edgeDrag.current) {
       const drag = edgeDrag.current
       const dx = w.x - drag.startPointer.x
@@ -897,6 +965,13 @@ export function FloorPlanCanvas() {
       setMarquee(null)
       return
     }
+    if (plantMove.current) {
+      plantMoveMoved.current = true
+      plantMove.current = null
+      marqueeActive.current = false
+      setMarquee(null)
+      return
+    }
     if (edgeDrag.current) {
       edgeDragMoved.current = edgeDrag.current.moved
       if (edgeDrag.current.moved) endDrag()
@@ -919,6 +994,15 @@ export function FloorPlanCanvas() {
   }
 
   const onStageClick = (e: Konva.KonvaEventObject<MouseEvent>) => {
+    if (e.evt.button !== 0) return
+    if (panMoved.current) {
+      panMoved.current = false
+      return
+    }
+    if (plantMoveMoved.current) {
+      plantMoveMoved.current = false
+      return
+    }
     if (
       tool === 'select' ||
       isWallOpeningTool(tool) ||
@@ -935,6 +1019,10 @@ export function FloorPlanCanvas() {
 
     if (tool === 'placeObject') {
       placeObjectAt(w.x, w.y)
+      return
+    }
+    if (tool === 'plant') {
+      placePlantAt(w.x, w.y)
       return
     }
     if (tool === 'placeTile') {
@@ -1164,8 +1252,12 @@ export function FloorPlanCanvas() {
   )
 
   return (
-    <div ref={containerRef} className={`plan-canvas ${conflict ? 'has-conflict' : ''}`}>
-      {floor.kind === 'ground' && (
+    <div
+      ref={containerRef}
+      className={`plan-canvas ${conflict ? 'has-conflict' : ''}`}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      {floor.kind === 'ground' && workbench !== 'landscape' && (
         <div className="plan-ground-hint">
           Земля — задайте уровень в свойствах. Чертёж стен на этажах выше.
         </div>
@@ -1205,6 +1297,10 @@ export function FloorPlanCanvas() {
           setPointer(null)
           panActive.current = false
           panLast.current = null
+          if (plantMove.current) {
+            plantMoveMoved.current = true
+            plantMove.current = null
+          }
           if (edgeDrag.current) {
             edgeDragMoved.current = edgeDrag.current.moved
             if (edgeDrag.current.moved) endDrag()
@@ -1219,6 +1315,42 @@ export function FloorPlanCanvas() {
       >
         <Layer>
           {gridLines}
+
+          {workbench === 'landscape' && plotOutline && (
+            <Line
+              points={worldRingToScreen(
+                [
+                  { x: plotOutline.minX, y: plotOutline.minY },
+                  { x: plotOutline.maxX, y: plotOutline.minY },
+                  { x: plotOutline.maxX, y: plotOutline.maxY },
+                  { x: plotOutline.minX, y: plotOutline.maxY },
+                ],
+                toScreen,
+              )}
+              closed
+              stroke="#c45c26"
+              strokeWidth={1.5}
+              dash={[8, 5]}
+              listening={false}
+            />
+          )}
+
+          {workbench === 'landscape' &&
+            houseOutline.map((ring, i) => {
+              const pts = worldRingToScreen(ring, toScreen)
+              if (pts.length < 6) return null
+              return (
+                <Line
+                  key={`house-outline-${i}`}
+                  points={pts}
+                  closed
+                  fill="rgba(61, 52, 41, 0.16)"
+                  stroke="#3d3429"
+                  strokeWidth={2}
+                  listening={false}
+                />
+              )
+            })}
 
           {lowerFloor &&
             lowerFloor.walls.map((wall) =>
@@ -1861,7 +1993,9 @@ export function FloorPlanCanvas() {
                   }
                   stroke={selected ? '#c45c26' : '#2a6f6a'}
                   strokeWidth={selected ? 2 : 1.5}
+                  listening={workbench === 'furnish'}
                   onMouseDown={(e) => {
+                    if (workbench !== 'furnish') return
                     if (tool !== 'select' || e.evt.button !== 0) return
                     if (e.evt.shiftKey || spaceDown.current || e.evt.altKey)
                       return
@@ -1885,7 +2019,7 @@ export function FloorPlanCanvas() {
                       objectMoveMoved.current = false
                       return
                     }
-                    if (tool === 'select') {
+                    if (workbench === 'furnish' && tool === 'select') {
                       setSelection({ kind: 'object', id: obj.id })
                     }
                   }}
@@ -1894,29 +2028,95 @@ export function FloorPlanCanvas() {
             )
           })}
 
-          {(floor.plants ?? []).map((p) => {
+          {(workbench === 'landscape'
+            ? (groundPlants ?? [])
+            : (floor.plants ?? [])
+          )
+            .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
+            .map((p) => {
             const selected = selection?.kind === 'plant' && selection.id === p.id
             const mid = toScreen(p.x, p.y)
-            const r = Math.max(6, 0.6 * p.scale * scale)
+            const landscape = workbench === 'landscape'
+            const sideM = landscape
+              ? plantPlanAabbSide(p, landscapeMonth)
+              : 1.2 * p.scale
+            const r = Math.max(landscape ? 2 : 6, (sideM / 2) * scale)
+            const name = speciesByKey(p.species).name
+            const labelW = Math.max(64, r * 2)
             return (
-              <Circle
-                key={p.id}
-                x={mid.x}
-                y={mid.y}
-                radius={r}
-                fill={
-                  selected
-                    ? 'rgba(45, 120, 62, 0.35)'
-                    : 'rgba(45, 120, 62, 0.18)'
-                }
-                stroke={selected ? '#2d783e' : '#3d6b2e'}
-                strokeWidth={selected ? 2 : 1}
-                onMouseDown={(e) => {
-                  if (e.evt.button !== 0) return
-                  e.cancelBubble = true
-                  setSelection({ kind: 'plant', id: p.id })
-                }}
-              />
+              <Group key={p.id}>
+                <Circle
+                  x={mid.x}
+                  y={mid.y}
+                  radius={r}
+                  fill={
+                    selected
+                      ? 'rgba(45, 120, 62, 0.35)'
+                      : 'rgba(45, 120, 62, 0.18)'
+                  }
+                  stroke={selected ? '#2d783e' : '#3d6b2e'}
+                  strokeWidth={selected ? 2 : 1}
+                  onMouseEnter={(e) => {
+                    if (!landscape) return
+                    if (tool !== 'select' && tool !== 'plant') return
+                    const c = e.target.getStage()?.container()
+                    if (c) c.style.cursor = 'grab'
+                  }}
+                  onMouseLeave={(e) => {
+                    const c = e.target.getStage()?.container()
+                    if (c) c.style.cursor = 'default'
+                  }}
+                  onMouseDown={(e) => {
+                    if (e.evt.button !== 0) return
+                    if (!landscape) {
+                      e.cancelBubble = true
+                      setSelection({ kind: 'plant', id: p.id })
+                      return
+                    }
+                    if (tool !== 'select' && tool !== 'plant') return
+                    if (e.evt.shiftKey || spaceDown.current || e.evt.altKey)
+                      return
+                    e.cancelBubble = true
+                    marqueeActive.current = false
+                    setMarquee(null)
+                    setSelection({ kind: 'plant', id: p.id })
+                    const stage = e.target.getStage()
+                    const pos = stage?.getPointerPosition()
+                    const world = pos ? toWorld(pos.x, pos.y) : { x: 0, y: 0 }
+                    plantMove.current = {
+                      id: p.id,
+                      start: { x: world.x, y: world.y },
+                      origin: { x: p.x, y: p.y },
+                      moved: false,
+                    }
+                    const c = e.target.getStage()?.container()
+                    if (c) c.style.cursor = 'grabbing'
+                  }}
+                  onClick={(e) => {
+                    e.cancelBubble = true
+                    if (plantMoveMoved.current) {
+                      plantMoveMoved.current = false
+                      return
+                    }
+                    if (landscape) {
+                      setSelection({ kind: 'plant', id: p.id })
+                    }
+                  }}
+                />
+                {landscape && (
+                  <Text
+                    x={mid.x - labelW / 2}
+                    y={mid.y - 7}
+                    width={labelW}
+                    align="center"
+                    text={name}
+                    fontSize={11}
+                    fontFamily="IBM Plex Sans, sans-serif"
+                    fill={selected ? '#1d4a28' : '#24331c'}
+                    listening={false}
+                  />
+                )}
+              </Group>
             )
           })}
 

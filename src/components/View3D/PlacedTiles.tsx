@@ -13,9 +13,12 @@ import {
   type Wall,
   type WallSide,
 } from '../../engine/types'
-import { buildPlacedTileGeometry } from '../../engine/geometry/tileMesh'
+import {
+  buildPlacedTileGeometry,
+  TILE_MESH_UV,
+} from '../../engine/geometry/tileMesh'
 import { fillTilesOnSurface, layoutTile } from '../../engine/geometry/tileFill'
-import { tileLocalPolygon } from '../../engine/geometry/tiles'
+import { tileFootprintSize, tileLocalPolygon } from '../../engine/geometry/tiles'
 import {
   boxTileFrame,
   floorTileFrame,
@@ -83,7 +86,26 @@ function TileMesh({
   const updateTileCut = useBuildingStore((s) => s.updateTileCut)
   const tool = useBuildingStore((s) => s.tool)
   const tileCutDraft = useBuildingStore((s) => s.tileCutDraft)
-  const geometry = useMemo(() => buildPlacedTileGeometry(floor, tile), [floor, tile])
+  const geometry = useMemo(
+    () => buildPlacedTileGeometry(floor, tile),
+    [
+      tile.id,
+      tile.u,
+      tile.v,
+      tile.width,
+      tile.length,
+      tile.thickness,
+      tile.rotation,
+      tile.clip,
+      tile.surface,
+      floor.elevation,
+      floor.height,
+      floor.vertices,
+      floor.walls,
+      floor.boxes,
+      floor.openings,
+    ],
+  )
   const drag = useRef<{
     ids: string[]
     startUv: { u: number; v: number }
@@ -186,10 +208,13 @@ function TileMesh({
         <PbrStandardMaterial
           material={tile.material}
           color={selected ? '#f0c8a0' : '#d2c2b0'}
-          worldWidthM={tile.material.tileSizeM}
-          worldHeightM={tile.material.tileSizeM}
+          ceramicStamp
+          faceWidthM={tileFootprintSize(tile).width}
+          faceHeightM={tileFootprintSize(tile).length}
+          texRegion={tile.texRegion}
           polygonOffset
           polygonOffsetFactor={-2}
+          vertexDisplacement={(tile.material.displacementScale ?? 0) > 0}
         />
         {selected && !dimmed && <Edges threshold={15} color="#c45c26" />}
       </mesh>
@@ -224,7 +249,7 @@ function GhostTiles({
         (x): x is { id: string; geo: THREE.BufferGeometry; tile: PlacedTile } =>
           x !== null,
       )
-  }, [floor, tiles])
+  }, [floor, tiles, TILE_MESH_UV])
 
   useEffect(() => {
     return () => {
@@ -241,8 +266,11 @@ function GhostTiles({
             color="#d2c2b0"
             transparent
             opacity={0.72}
-            worldWidthM={tile.material.tileSizeM}
-            worldHeightM={tile.material.tileSizeM}
+            ceramicStamp
+            faceWidthM={tileFootprintSize(tile).width}
+            faceHeightM={tileFootprintSize(tile).length}
+            texRegion={tile.texRegion}
+            vertexDisplacement={false}
           />
         </mesh>
       ))}
@@ -322,7 +350,8 @@ function useTileHoverGhost(floor: Floor, hit: { surface: TileSurface; u: number;
         rotation,
         pattern,
         floor,
-      ).slice(0, 400)
+        { limit: 400, snap: snap },
+      )
     }
     if (tool === 'placeTile') {
       const tile = layoutTile(

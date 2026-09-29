@@ -96,6 +96,8 @@ export function MaterialSlot({
   onClear,
   applyOnly = false,
   preferCollection = false,
+  showRepeat = true,
+  allowClear = true,
 }: {
   label: string
   value: MaterialRef | null | undefined
@@ -103,6 +105,9 @@ export function MaterialSlot({
   onClear: () => void
   applyOnly?: boolean
   preferCollection?: boolean
+  /** Hide tile-size / relief — ceramic tiles stamp one image per face. */
+  showRepeat?: boolean
+  allowClear?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const thumb = useMaterialThumb(applyOnly ? null : value)
@@ -111,12 +116,12 @@ export function MaterialSlot({
     <div className="mat-slot">
       <div className="mat-slot-head">
         <span>{label}</span>
-        {!applyOnly && value && (
+        {!applyOnly && value && allowClear && (
           <button type="button" className="ghost small" onClick={onClear}>
             Сбросить
           </button>
         )}
-        {applyOnly && (
+        {applyOnly && allowClear && (
           <button type="button" className="ghost small" onClick={onClear}>
             Сбросить стены
           </button>
@@ -153,7 +158,7 @@ export function MaterialSlot({
             : materialLabel(value)}
         </span>
       </button>
-      {!applyOnly && value && (
+      {!applyOnly && showRepeat && value && (
         <div className="mat-tile-row">
           <label className="mat-tile">
             Тайл, м

@@ -368,7 +368,7 @@ export function floorMeshDeps(floor: Floor): readonly unknown[] {
     floor.height,
     floor.slabThickness,
     floor.vertices,
-    floor.walls,
+    floor.walls.map((w) => `${w.id}:${w.a}:${w.b}:${w.thickness}`).join('|'),
     floor.openings,
     floor.slabOpenings,
     floor.plates,

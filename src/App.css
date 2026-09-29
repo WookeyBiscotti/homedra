@@ -542,8 +542,52 @@ body.panel-resizing * {
 
 .paint-workbench-header,
 .paint-brush-preview,
-.paint-hint {
+.paint-hint,
+.paint-workbench .covering-editor {
   flex-shrink: 0;
+}
+
+.paint-workbench .covering-editor {
+  max-height: 42vh;
+  overflow: auto;
+  padding-right: 0.15rem;
+}
+
+.paint-brush-thumb {
+  width: 56px;
+  height: 56px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+}
+
+.covering-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.covering-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.covering-details {
+  margin: 0 0 0.35rem;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--bg-deep) 55%, transparent);
+}
+
+.covering-details > summary {
+  cursor: pointer;
+  font-size: 0.78rem;
+  user-select: none;
+}
+
+.covering-details[open] > summary {
+  margin-bottom: 0.35rem;
 }
 
 .paint-workbench .panel-title {
@@ -619,11 +663,21 @@ body.panel-resizing * {
 }
 
 .landscape-species-label {
-  margin: 0.35rem 0 0;
+  margin: 0 0 0.3rem;
   font-size: 0.72rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--muted, #8a8a82);
+  color: var(--muted);
+}
+
+.site-plot-block {
+  margin: 0 0 0.7rem;
+  padding-bottom: 0.55rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.site-plot-fields .site-center-btn {
+  margin-top: 0.15rem;
 }
 
 .landscape-species {
@@ -636,6 +690,10 @@ body.panel-resizing * {
   display: block;
   height: 28px;
   border-radius: 3px;
+}
+
+.landscape-species .tex-card span {
+  white-space: normal;
 }
 
 .landscape-fields {
@@ -654,6 +712,7 @@ body.panel-resizing * {
 .landscape-fields input[type='range'],
 .landscape-fields input[type='color'],
 .landscape-fields input[type='text'],
+.landscape-fields input[type='number'],
 .landscape-fields select {
   grid-column: 1 / -1;
 }
@@ -1039,13 +1098,15 @@ body.panel-resizing * {
   align-items: center;
 }
 
-.paint-brush-preview img {
+.paint-brush-preview img,
+.paint-brush-preview .paint-brush-thumb {
   width: 56px;
   height: 56px;
   object-fit: cover;
   border-radius: 4px;
   border: 1px solid var(--line);
   background: var(--bg-deep);
+  flex-shrink: 0;
 }
 
 .paint-brush-empty {
@@ -1201,6 +1262,64 @@ button.linkish {
   z-index: 2;
   top: 0.6rem;
   left: 0.6rem;
+}
+
+.landscape-month-bar {
+  position: absolute;
+  z-index: 2;
+  top: 3.15rem;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(38rem, calc(100% - 14rem));
+  padding: 0.4rem 0.75rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 4px 16px rgba(42, 36, 28, 0.12);
+  pointer-events: auto;
+}
+
+.landscape-month-title {
+  margin: 0 0 0.15rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.landscape-month-bar input[type='range'] {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.landscape-month-ticks {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 0.1rem;
+  margin-top: 0.15rem;
+}
+
+.landscape-month-ticks button {
+  border: none;
+  background: transparent;
+  padding: 0.12rem 0;
+  font-size: 0.68rem;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.landscape-month-ticks button:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--bg-deep) 55%, transparent);
+}
+
+.landscape-month-ticks button.active {
+  color: var(--ink);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .visit-hint {
@@ -2498,6 +2617,8 @@ button.ghost.small {
 }
 
 .pbr-editor {
+  display: flex;
+  flex-direction: column;
   gap: 0.5rem;
 }
 

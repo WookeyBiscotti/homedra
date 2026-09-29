@@ -25,20 +25,24 @@ export type { LandscapeFrame }
 export function defaultLandscapeFrame(building: Building): LandscapeFrame {
   const b = buildingBounds(building)
   if (!Number.isFinite(b.minX)) {
-    return { size: 40, originX: 0, originY: 0 }
+    return { size: 40, sizeY: 40, originX: 0, originY: 0 }
   }
-  const span = Math.max(b.maxX - b.minX, b.maxZ - b.minZ, 8)
+  const spanX = Math.max(8, b.maxX - b.minX)
+  const spanY = Math.max(8, b.maxZ - b.minZ)
   return {
-    size: Math.max(40, span * 3),
+    size: Math.max(40, spanX + 16),
+    sizeY: Math.max(40, spanY + 16),
     originX: (b.minX + b.maxX) / 2,
     originY: (b.minZ + b.maxZ) / 2,
   }
 }
 
 export function terrainFrame(terrain?: LandscapeTerrain | null): LandscapeFrame {
-  if (!terrain) return { size: 40, originX: 0, originY: 0 }
+  if (!terrain) return { size: 40, sizeY: 40, originX: 0, originY: 0 }
+  const size = Math.max(8, Number(terrain.size) || 40)
   return {
-    size: terrain.size,
+    size,
+    sizeY: Math.max(8, Number(terrain.sizeY) || size),
     originX: terrain.originX,
     originY: terrain.originY,
   }
@@ -48,11 +52,19 @@ export function ensureTerrain(
   building: Building,
   terrain?: LandscapeTerrain | null,
 ): LandscapeTerrain {
-  if (terrain) return terrain
+  if (terrain) {
+    const size = Math.max(8, Number(terrain.size) || 40)
+    return {
+      ...terrain,
+      size,
+      sizeY: Math.max(8, Number(terrain.sizeY) || size),
+    }
+  }
   const frame = defaultLandscapeFrame(building)
   return {
     resolution: 128,
     size: frame.size,
+    sizeY: frame.sizeY ?? frame.size,
     originX: frame.originX,
     originY: frame.originY,
   }

@@ -1,8 +1,9 @@
 import { sameTileSurface, type Floor, type PlacedTile } from '../types'
 import { excludedTileIds, tileLocalRect, type TileRect } from './tiles'
-import type { TileContour } from './tileSurfaces'
+import type { TileContour, TilePoint } from './tileSurfaces'
 
 const DEFAULT_THRESHOLD = 0.08
+const AA_EPS = 1e-6
 
 export type TileSnapOpts = {
   excludeId?: string
@@ -10,6 +11,8 @@ export type TileSnapOpts = {
   groutM: number
   threshold?: number
 }
+
+export type AxisGuides = { u: number[]; v: number[] }
 
 type AxisCand = { value: number; dist: number }
 
@@ -28,25 +31,131 @@ function bestAxis(cands: AxisCand[]): AxisCand | null {
   return best
 }
 
-function contourEdges(contour: TileContour | null): TileRect[] {
-  if (!contour) return []
-  const xs = contour.outer.map((p) => p.x)
-  const ys = contour.outer.map((p) => p.y)
-  if (xs.length === 0) return []
-  return [
-    {
-      minU: Math.min(...xs),
-      maxU: Math.max(...xs),
-      minV: Math.min(...ys),
-      maxV: Math.max(...ys),
-    },
-  ]
+function uniqueSorted(values: number[], eps = AA_EPS): number[] {
+  const sorted = [...values].sort((a, b) => a - b)
+  const out: number[] = []
+  for (const v of sorted) {
+    if (out.length === 0 || Math.abs(out[out.length - 1]! - v) > eps) out.push(v)
+  }
+  return out
+}
+
+function ringsAxisGuides(rings: TilePoint[][]): AxisGuides {
+  const u: number[] = []
+  const v: number[] = []
+  for (const ring of rings) {
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[i]!
+      const b = ring[(i + 1) % ring.length]!
+      if (Math.abs(a.x - b.x) <= AA_EPS) u.push(a.x)
+      if (Math.abs(a.y - b.y) <= AA_EPS) v.push(a.y)
+    }
+  }
+  return { u: uniqueSorted(u), v: uniqueSorted(v) }
+}
+
+/** Axis-aligned contour edges: walls (U) and floor/ceiling (V), plus openings. */
+export function contourAxisGuides(
+  contour: TileContour | null,
+  opts?: { includeHoles?: boolean },
+): AxisGuides {
+  if (!contour) return { u: [], v: [] }
+  const rings =
+    opts?.includeHoles === false ? [contour.outer] : [contour.outer, ...contour.holes]
+  return ringsAxisGuides(rings)
+}
+
+type FaceFlush = { edge: number; flush: number }
+
+function ringSignedArea(ring: TilePoint[]): number {
+  let area = 0
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i]!
+    const b = ring[(i + 1) % ring.length]!
+    area += a.x * b.y - b.x * a.y
+  }
+  return area / 2
+}
+
+/** Inward tile-center flushes for outer walls / floor / ceiling. */
+function contourInwardFaces(
+  contour: TileContour | null,
+  grout: number,
+  halfU: number,
+  halfV: number,
+): { u: FaceFlush[]; v: FaceFlush[] } {
+  if (!contour || contour.outer.length < 3) return { u: [], v: [] }
+  const ring = contour.outer
+  const area = ringSignedArea(ring)
+  if (Math.abs(area) < 1e-12) return { u: [], v: [] }
+  const ccw = area > 0
+  const u: FaceFlush[] = []
+  const v: FaceFlush[] = []
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i]!
+    const b = ring[(i + 1) % ring.length]!
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    if (Math.abs(dx) <= AA_EPS && Math.abs(dy) > AA_EPS) {
+      let inward = dy > 0 ? -1 : 1
+      if (!ccw) inward = -inward
+      u.push({ edge: a.x, flush: a.x + inward * (grout + halfU) })
+    } else if (Math.abs(dy) <= AA_EPS && Math.abs(dx) > AA_EPS) {
+      let inward = dx > 0 ? 1 : -1
+      if (!ccw) inward = -inward
+      v.push({ edge: a.y, flush: a.y + inward * (grout + halfV) })
+    }
+  }
+  return { u, v }
+}
+
+function snapFillAxis(origin: number, step: number, faces: FaceFlush[]): number {
+  if (faces.length === 0 || step < 1e-6) return origin
+  let best = origin
+  let bestEdgeDist = Infinity
+  let bestPhaseDist = Infinity
+  for (const face of faces) {
+    const n = Math.round((origin - face.flush) / step)
+    const value = face.flush + n * step
+    const edgeDist = Math.abs(origin - face.edge)
+    const phaseDist = Math.abs(value - origin)
+    if (
+      edgeDist < bestEdgeDist - 1e-9 ||
+      (Math.abs(edgeDist - bestEdgeDist) <= 1e-9 && phaseDist < bestPhaseDist)
+    ) {
+      bestEdgeDist = edgeDist
+      bestPhaseDist = phaseDist
+      best = value
+    }
+  }
+  return best
+}
+
+/**
+ * Phase-align a fill grid so tile edges flush to the nearest wall / floor face.
+ * Shift is at most half a step — the click stays on the same cell.
+ */
+export function snapFillOriginToFaces(
+  originU: number,
+  originV: number,
+  stepU: number,
+  stepV: number,
+  halfU: number,
+  halfV: number,
+  grout: number,
+  contour: TileContour | null,
+): { u: number; v: number } {
+  const faces = contourInwardFaces(contour, grout, halfU, halfV)
+  return {
+    u: snapFillAxis(originU, stepU, faces.u),
+    v: snapFillAxis(originV, stepV, faces.v),
+  }
 }
 
 function snapRect(
   rect: TileRect,
   others: TileRect[],
-  bounds: TileRect[],
+  guides: AxisGuides,
   grout: number,
   thr: number,
 ): { u: number; v: number } {
@@ -74,11 +183,13 @@ function snapRect(
     flushU(other)
     flushV(other)
   }
-  for (const b of bounds) {
-    consider(xs, b.minU + grout + w / 2, Math.abs(rect.minU - (b.minU + grout)), thr)
-    consider(xs, b.maxU - grout - w / 2, Math.abs(rect.maxU - (b.maxU - grout)), thr)
-    consider(ys, b.minV + grout + h / 2, Math.abs(rect.minV - (b.minV + grout)), thr)
-    consider(ys, b.maxV - grout - h / 2, Math.abs(rect.maxV - (b.maxV - grout)), thr)
+  for (const e of guides.u) {
+    consider(xs, e + grout + w / 2, Math.abs(rect.minU - (e + grout)), thr)
+    consider(xs, e - grout - w / 2, Math.abs(rect.maxU - (e - grout)), thr)
+  }
+  for (const e of guides.v) {
+    consider(ys, e + grout + h / 2, Math.abs(rect.minV - (e + grout)), thr)
+    consider(ys, e - grout - h / 2, Math.abs(rect.maxV - (e - grout)), thr)
   }
 
   const bx = bestAxis(xs)
@@ -100,8 +211,8 @@ export function snapTileCenter(
       (o) => !skip.has(o.id) && sameTileSurface(o.surface, tile.surface),
     )
     .map(tileLocalRect)
-  const bounds = contourEdges(contour)
-  return snapRect(rect, neighborRects, bounds, opts.groutM, thr)
+  const guides = contourAxisGuides(contour)
+  return snapRect(rect, neighborRects, guides, opts.groutM, thr)
 }
 
 export function snapTileOnFloor(

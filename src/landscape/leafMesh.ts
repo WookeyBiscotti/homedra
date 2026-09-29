@@ -69,14 +69,14 @@ export function makeStarLeafGeometry(): THREE.BufferGeometry {
   return geo
 }
 
-/** Willow / creosote lance. */
+/** Willow-leaved pear / spirea lance (~4:1), wide enough to read in 3D. */
 export function makeLanceLeafGeometry(): THREE.BufferGeometry {
   const shape = new THREE.Shape()
   shape.moveTo(0, -0.5)
-  shape.bezierCurveTo(-0.05, -0.2, -0.07, 0.15, -0.03, 0.4)
-  shape.bezierCurveTo(-0.01, 0.48, 0, 0.5, 0, 0.5)
-  shape.bezierCurveTo(0, 0.5, 0.01, 0.48, 0.03, 0.4)
-  shape.bezierCurveTo(0.07, 0.15, 0.05, -0.2, 0, -0.5)
+  shape.bezierCurveTo(-0.1, -0.42, -0.16, -0.06, -0.13, 0.14)
+  shape.bezierCurveTo(-0.08, 0.38, -0.03, 0.47, 0, 0.5)
+  shape.bezierCurveTo(0.03, 0.47, 0.08, 0.38, 0.13, 0.14)
+  shape.bezierCurveTo(0.16, -0.06, 0.1, -0.42, 0, -0.5)
   const geo = new THREE.ShapeGeometry(shape, 8)
   remapLeafUvs(geo)
   geo.computeVertexNormals()
@@ -367,8 +367,15 @@ export function leafAlbedoTexture(kind: LeafKind): THREE.CanvasTexture {
     }
   } else if (kind === 'lance') {
     ctx.moveTo(0, 60)
-    ctx.bezierCurveTo(-10, 20, -8, -24, 0, -60)
-    ctx.bezierCurveTo(8, -24, 10, 20, 0, 60)
+    ctx.bezierCurveTo(-18, 22, -16, -26, 0, -60)
+    ctx.bezierCurveTo(16, -26, 18, 22, 0, 60)
+  } else if (kind === 'maple') {
+    ctx.moveTo(0, 50)
+    ctx.lineTo(-8, 28)
+    ctx.bezierCurveTo(-36, 18, -48, -4, -22, -10)
+    ctx.bezierCurveTo(-38, -22, -18, -46, 0, -52)
+    ctx.bezierCurveTo(18, -46, 38, -22, 22, -10)
+    ctx.bezierCurveTo(48, -4, 36, 18, 8, 28)
   } else {
     ctx.moveTo(0, 62)
     ctx.bezierCurveTo(-28, 36, -40, -8, 0, -62)
@@ -428,6 +435,9 @@ export function sharedLeafGeometry(kind: LeafKind): THREE.BufferGeometry {
       break
     case 'heart':
       geo = makeHeartLeafGeometry()
+      break
+    case 'maple':
+      geo = makeMapleLeafGeometry()
       break
     case 'petal':
       geo = makeBlossomGeometry()

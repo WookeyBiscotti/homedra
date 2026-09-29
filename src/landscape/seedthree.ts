@@ -18,6 +18,12 @@ import {
 import { growEzTree } from './eztree'
 import { habitRecipe } from './habit'
 import {
+  DEFAULT_LANDSCAPE_MONTH,
+  seasonLook,
+  seasonalSpecies,
+  type PlantSeasonLook,
+} from './season'
+import {
   listSpecies,
   speciesByKey,
   type LeafKind,
@@ -77,12 +83,23 @@ function leafMat(
 function bloomMat(color: string): THREE.MeshStandardMaterial {
   const mat = new THREE.MeshStandardMaterial({
     color,
-    roughness: 0.52,
+    roughness: 0.34,
     metalness: 0,
+    emissive: color,
+    emissiveIntensity: 0.28,
     side: THREE.DoubleSide,
   })
+  mat.defines = { ...mat.defines, USE_UV: '' }
   return applyFoliageWind(mat)
 }
+
+const stamenMat = new THREE.MeshStandardMaterial({
+  color: '#f2d070',
+  roughness: 0.4,
+  metalness: 0,
+  emissive: '#e8c040',
+  emissiveIntensity: 0.2,
+})
 
 function radius(h: number, ratio: number, min: number): number {
   return Math.max(min, h * ratio)
@@ -97,9 +114,11 @@ function leafAspect(kind: LeafKind): { sx: number; sy: number } {
     case 'scale':
       return { sx: 0.72, sy: 1.05 }
     case 'lance':
-      return { sx: 0.32, sy: 1.2 }
+      return { sx: 0.92, sy: 1.12 }
     case 'heart':
       return { sx: 0.82, sy: 0.95 }
+    case 'maple':
+      return { sx: 0.95, sy: 0.95 }
     case 'petal':
       return { sx: 1, sy: 1 }
     default:
@@ -108,15 +127,59 @@ function leafAspect(kind: LeafKind): { sx: number; sy: number } {
 }
 
 /** Limb that pivots at its base so tilt never lifts the joint off the parent. */
+const GROUND_CLEAR = 0.4
+
+function clipLengthToGround(
+  parent: THREE.Object3D,
+  opts: { y0?: number; tilt?: number; yaw?: number },
+  want: number,
+  floorY = GROUND_CLEAR,
+): number {
+  const wantLen = Math.max(0, want)
+  if (wantLen < 0.08) return 0
+  parent.updateWorldMatrix(true, false)
+  const probe = new THREE.Group()
+  probe.position.y = opts.y0 ?? 0
+  probe.rotation.order = 'YZX'
+  probe.rotation.y = opts.yaw ?? 0
+  probe.rotation.z = opts.tilt ?? 0
+  parent.add(probe)
+  probe.updateMatrixWorld(true)
+  const origin = new THREE.Vector3().setFromMatrixPosition(probe.matrixWorld)
+  const dir = new THREE.Vector3(0, 1, 0).transformDirection(probe.matrixWorld)
+  parent.remove(probe)
+  if (dir.y >= -0.02) return wantLen
+  const maxLen = (floorY - origin.y) / dir.y
+  if (!Number.isFinite(maxLen) || maxLen < 0.12) return 0
+  return Math.min(wantLen, maxLen)
+}
+
 function addLimb(
   parent: THREE.Object3D,
   mat: THREE.Material,
   length: number,
   r0: number,
   r1: number,
-  opts?: { y0?: number; tilt?: number; yaw?: number; segs?: number },
+  opts?: {
+    y0?: number
+    tilt?: number
+    yaw?: number
+    segs?: number
+    clipGround?: boolean
+  },
 ): THREE.Group {
-  const len = Math.max(0.08, length)
+  let len = Math.max(0.08, length)
+  if (opts?.clipGround) {
+    const clipped = clipLengthToGround(parent, opts, len)
+    if (clipped < 0.12) {
+      const skip = new THREE.Group()
+      skip.position.y = opts.y0 ?? 0
+      skip.userData.limbLen = 0
+      parent.add(skip)
+      return skip
+    }
+    len = clipped
+  }
   const geo = new THREE.CylinderGeometry(
     Math.max(0.01, r1),
     Math.max(0.012, r0),
@@ -133,6 +196,7 @@ function addLimb(
   pivot.rotation.order = 'YZX'
   pivot.rotation.y = opts?.yaw ?? 0
   pivot.rotation.z = opts?.tilt ?? 0
+  pivot.userData.limbLen = len
   pivot.add(mesh)
   parent.add(pivot)
   return pivot
@@ -153,14 +217,16 @@ function addLimbChain(
     curve?: number
     curveBack?: number
     tipLift?: number
+    clipGround?: boolean
   },
-): { root: THREE.Group; tip: THREE.Group } {
+): { root: THREE.Group; tip: THREE.Group; length: number } {
   const segs = Math.max(1, opts.segments ?? 1)
   const len = Math.max(0.12, length)
   const segLen = len / segs
   let node: THREE.Object3D = parent
   let root: THREE.Group | null = null
   let tip = parent as THREE.Group
+  let grown = 0
   for (let s = 0; s < segs; s++) {
     const t = segs === 1 ? 0 : s / (segs - 1)
     let extra = 0
@@ -168,15 +234,20 @@ function addLimbChain(
     else if (s >= 2) extra = opts.tipLift ?? 0
     const rad0 = r0 * (1 - t * 0.42)
     const rad1 = r1 * (1 - t * 0.28)
-    tip = addLimb(node, mat, segLen, rad0, rad1, {
+    const piece = addLimb(node, mat, segLen, rad0, rad1, {
       y0: s === 0 ? (opts.y0 ?? 0) : segLen * 0.98,
       tilt: s === 0 ? (opts.tilt ?? 0) : extra,
       yaw: s === 0 ? (opts.yaw ?? 0) : 0,
+      clipGround: opts.clipGround,
     })
+    const used = (piece.userData.limbLen as number) ?? 0
+    if (used < 0.12) break
+    tip = piece
     if (!root) root = tip
     node = tip
+    grown += used
   }
-  return { root: root!, tip }
+  return { root: root ?? tip, tip, length: grown }
 }
 
 function addLeafCard(
@@ -245,6 +316,11 @@ function addCone(
   parent.add(mesh)
 }
 
+function markBlossom(obj: THREE.Object3D): void {
+  obj.userData.foliage = true
+  obj.userData.blossom = true
+}
+
 function addBlossomCard(
   parent: THREE.Object3D,
   mat: THREE.Material,
@@ -257,11 +333,16 @@ function addBlossomCard(
   const mesh = new THREE.Mesh(blossomCard, mat)
   mesh.castShadow = true
   mesh.frustumCulled = false
-  mesh.userData.foliage = true
+  markBlossom(mesh)
   mesh.position.set(x, y, z)
   mesh.scale.setScalar(s)
-  mesh.rotation.set(0.35 + Math.random() * 0.4, yaw, (Math.random() - 0.5) * 0.3)
+  mesh.rotation.set(0.15 + Math.random() * 0.55, yaw, (Math.random() - 0.5) * 0.4)
   parent.add(mesh)
+  const eye = new THREE.Mesh(fruitGeo, stamenMat)
+  markBlossom(eye)
+  eye.position.set(x, y, z)
+  eye.scale.setScalar(Math.max(0.012, s * 0.16))
+  parent.add(eye)
 }
 
 /** Layered 3D bloom: rose / peony / tulip cup. */
@@ -292,15 +373,26 @@ function addPetalBloom(
       mesh.rotation.z = open
       mesh.position.set(0, layer * scale * 0.08, 0)
       mesh.scale.set(s * 0.55, s, 1)
+      markBlossom(mesh)
       bloom.add(mesh)
     }
   }
+  markBlossom(bloom)
   if (center) {
     const eye = new THREE.Mesh(fruitGeo, center)
+    markBlossom(eye)
     eye.position.y = scale * 0.12
     eye.scale.setScalar(scale * 0.12)
     bloom.add(eye)
   }
+}
+
+function fruitKind(
+  recFruit: false | 'apple' | 'cherry',
+  look: PlantSeasonLook,
+): false | 'apple' | 'cherry' {
+  if (!look.fruit) return false
+  return recFruit || 'cherry'
 }
 
 function dressBranch(
@@ -315,46 +407,53 @@ function dressBranch(
   fruit: false | 'apple' | 'cherry',
   blossom: boolean,
   bloom: THREE.Material | null,
+  leaves: boolean,
 ): void {
-  if (!shape.showLeaves) return
   const kind = sp.leafKind
   const pitch = deg(shape.leafAngle)
-  const leafN = Math.max(
+  let leafN = Math.max(
     0,
     Math.round(
       shape.leavesPerBranch * (1.15 + len * 0.6) * (0.82 + rng() * 0.36),
     ),
   )
-  for (let k = 0; k < leafN; k++) {
-    const along =
-      1 - rng() * Math.max(0.12, leafAlong) * (1 - shape.leafStart)
-    const s =
-      shape.leafSize *
-      (1 + (rng() - 0.5) * 2 * shape.leafSizeVar) *
-      (sp.kind === 'shrub' ? 1.1 : 1)
-    const radial = len * (0.08 + (1 - leafAlong) * 0.06 + rng() * 0.16)
-    addLeafCard(
-      br,
-      rng() > 0.28 ? leafA : leafB,
-      kind,
-      (rng() - 0.5) * radial,
-      along * len,
-      (rng() - 0.5) * radial,
-      s,
-      rng() * Math.PI,
-      pitch + (rng() - 0.5) * 0.25,
-    )
+  if (leaves && blossom && sp.habit !== 'weeping') {
+    leafN = Math.max(2, Math.round(leafN * 0.38))
   }
-  if (blossom && bloom && rng() > 0.28) {
-    const bunches = 1 + Math.floor(rng() * 2)
+  if (leaves) {
+    for (let k = 0; k < leafN; k++) {
+      const along =
+        1 - rng() * Math.max(0.12, leafAlong) * (1 - shape.leafStart)
+      const s =
+        shape.leafSize *
+        (1 + (rng() - 0.5) * 2 * shape.leafSizeVar) *
+        (sp.kind === 'shrub' ? 1.1 : 1)
+      const radial = len * (0.08 + (1 - leafAlong) * 0.06 + rng() * 0.16)
+      addLeafCard(
+        br,
+        rng() > 0.28 ? leafA : leafB,
+        kind,
+        (rng() - 0.5) * radial,
+        along * len,
+        (rng() - 0.5) * radial,
+        s,
+        rng() * Math.PI,
+        pitch + (rng() - 0.5) * 0.25,
+      )
+    }
+  }
+  if (blossom && bloom) {
+    const bunches = 4 + Math.floor(rng() * 5)
+    const radial = Math.max(0.1, len * 0.2)
+    const size = 0.2 + rng() * 0.1 + Math.min(0.12, len * 0.04)
     for (let i = 0; i < bunches; i++) {
       addBlossomCard(
         br,
         bloom,
-        (rng() - 0.5) * 0.1,
-        len * (0.62 + rng() * 0.32),
-        (rng() - 0.5) * 0.1,
-        0.1 + rng() * 0.05,
+        (rng() - 0.5) * radial,
+        len * (0.42 + rng() * 0.52),
+        (rng() - 0.5) * radial,
+        size * (0.85 + rng() * 0.3),
         rng() * Math.PI,
       )
     }
@@ -378,6 +477,7 @@ function growBroadleaf(
   sp: SpeciesDef,
   rng: () => number,
   shape: PlantShape,
+  look: PlantSeasonLook,
 ): THREE.Group {
   const g = new THREE.Group()
   const rec = habitRecipe(sp.habit)
@@ -385,11 +485,32 @@ function growBroadleaf(
   const bark = barkMat(sp.trunkColor, rec.barkRough)
   const leafA = leafMat(sp.leafColor, sp.leafKind, shape.leafAlpha)
   const leafB = leafMat(sp.leafColor2, sp.leafKind, shape.leafAlpha)
-  const bloom = rec.blossom ? bloomMat(sp.flowerColor) : null
+  const foliage = shape.showLeaves
+  const leaves = foliage && look.showLeaves
+  const blossom = foliage && look.blossom
+  const fruit = foliage ? fruitKind(rec.fruit, look) : false
+  const bloom = blossom ? bloomMat(sp.flowerColor) : null
   const thick = shape.trunkThickness * rec.thin
   const rTrunk = radius(h, 0.036 * thick, rec.thin < 0.6 ? 0.028 : 0.048)
   const bole = Math.max(rec.bole, shape.leafStart * 0.85)
-  const leader = rec.decurrent ? h * Math.min(0.55, bole + 0.16) : h
+  const leader = rec.decurrent
+    ? h * (sp.habit === 'weeping' ? 0.74 : Math.min(0.55, bole + 0.16))
+    : h
+  const dress = (obj: THREE.Object3D, len: number) =>
+    dressBranch(
+      obj,
+      sp,
+      shape,
+      rng,
+      len,
+      leafA,
+      leafB,
+      rec.leafAlong,
+      fruit,
+      blossom,
+      bloom,
+      leaves,
+    )
   addLimb(
     g,
     bark,
@@ -423,22 +544,25 @@ function growBroadleaf(
     const pair = rec.opposite
       ? Math.floor(i / 2) / Math.max(1, Math.ceil(branches / 2) - 1)
       : i / Math.max(1, branches - 1)
-    const t = bole + pair * (0.92 - bole)
+    const t =
+      sp.habit === 'weeping'
+        ? 0.52 + pair * 0.4
+        : bole + pair * (0.92 - bole)
     const yaw = rec.opposite
       ? Math.floor(i / 2) * rec.rotate + (i % 2) * Math.PI
       : i * rec.rotate + rng() * 0.35
     const spread = crownRadius(shape.crownShape, t)
+    const along = rec.highCrown
+      ? 0.7 + (1 - t) * 0.2
+      : 1.12 - t * 0.22
     const len = Math.max(
       0.35,
-      h *
-        rec.branchLen *
-        (0.82 + rng() * 0.28) *
-        (0.45 + spread) *
-        (rec.highCrown ? 0.7 + (1 - t) * 0.2 : 1.12 - t * 0.22),
+      h * rec.branchLen * (0.82 + rng() * 0.28) * (0.45 + spread) * along,
     )
     let tilt = tilt0 * (0.82 + rng() * 0.24) + (rng() - 0.5) * gnarl * 0.55
     tilt -= rec.tipLift * 0.28 * t
     tilt = THREE.MathUtils.clamp(tilt, deg(14), deg(104))
+    const clipGround = sp.habit === 'weeping'
     const r0 = radius(h, 0.016 * thick * (1.08 - t), rec.thin < 0.6 ? 0.014 : 0.02)
     const br = addLimbChain(g, bark, len, r0, r0 * 0.36, {
       y0: (rec.decurrent ? leader : h) * t,
@@ -448,80 +572,55 @@ function growBroadleaf(
       curve: rec.curve * (0.7 + gnarl),
       curveBack: rec.curveBack,
       tipLift: -rec.tipLift * 0.45 + rec.droop,
+      clipGround,
     })
-    dressBranch(
-      br.root,
-      sp,
-      shape,
-      rng,
-      len,
-      leafA,
-      leafB,
-      rec.leafAlong,
-      rec.fruit,
-      rec.blossom,
-      bloom,
-    )
-    dressBranch(
-      br.tip,
-      sp,
-      shape,
-      rng,
-      len / rec.segments,
-      leafA,
-      leafB,
-      rec.leafAlong,
-      rec.fruit,
-      rec.blossom,
-      bloom,
-    )
-    const twLen = Math.max(0.28, len * rec.twigLen * (1.15 + rng() * 0.35))
+    const wood = Math.max(0.12, br.length || len)
+    if (br.length < 0.12) continue
+    dress(br.root, wood)
+    dress(br.tip, Math.max(0.12, wood / rec.segments))
+    const twWant = Math.max(0.28, wood * rec.twigLen * (1.15 + rng() * 0.35))
     if (levels > 2) {
-      const tw = addLimb(br.tip, bark, twLen, r0 * 0.48, r0 * 0.2, {
-        y0: (len / rec.segments) * 0.62,
-        tilt: 0.28 + gnarl * 0.25 + rec.droop * 0.4,
+      const tw = addLimb(br.tip, bark, twWant, r0 * 0.48, r0 * 0.2, {
+        y0: (wood / rec.segments) * 0.62,
+        tilt: 0.28 + gnarl * 0.25 + rec.droop * 0.35,
         yaw: rng() * Math.PI,
+        clipGround,
       })
-      dressBranch(tw, sp, shape, rng, twLen, leafA, leafB, rec.leafAlong, rec.fruit, rec.blossom, bloom)
+      if ((tw.userData.limbLen as number) >= 0.12) dress(tw, tw.userData.limbLen)
+    }
+    if (clipGround) {
+      const hang = addLimb(br.tip, bark, twWant * 1.15, r0 * 0.24, r0 * 0.08, {
+        y0: (wood / rec.segments) * 0.82,
+        tilt: 0.55 + rng() * 0.28,
+        yaw: rng() * Math.PI * 2,
+        segs: 5,
+        clipGround: true,
+      })
+      if ((hang.userData.limbLen as number) >= 0.12) dress(hang, hang.userData.limbLen)
     }
     if (levels > 3) {
-      const tw2 = addLimb(br.root, bark, len * rec.twigLen * 0.8, r0 * 0.38, r0 * 0.16, {
-        y0: (len / rec.segments) * 0.42,
-        tilt: 0.4 + rng() * 0.2,
-        yaw: 1.1 + rng(),
-      })
-      dressBranch(
-        tw2,
-        sp,
-        shape,
-        rng,
-        len * rec.twigLen * 0.8,
-        leafA,
-        leafB,
-        rec.leafAlong,
-        rec.fruit,
-        rec.blossom,
-        bloom,
+      const tw2 = addLimb(
+        br.root,
+        bark,
+        wood * rec.twigLen * 0.8,
+        r0 * 0.38,
+        r0 * 0.16,
+        {
+          y0: (wood / rec.segments) * 0.42,
+          tilt: 0.4 + rng() * 0.2,
+          yaw: 1.1 + rng(),
+          clipGround,
+        },
       )
+      if ((tw2.userData.limbLen as number) >= 0.12) dress(tw2, tw2.userData.limbLen)
       if (rng() > 0.4) {
-        const tw3 = addLimb(br.tip, bark, twLen * 0.65, r0 * 0.28, r0 * 0.12, {
-          y0: (len / rec.segments) * 0.35,
+        const tw3 = addLimb(br.tip, bark, twWant * 0.65, r0 * 0.28, r0 * 0.12, {
+          y0: (wood / rec.segments) * 0.35,
           tilt: 0.5,
           yaw: rng() * Math.PI * 2,
+          clipGround,
         })
-        dressBranch(
-          tw3,
-          sp,
-          shape,
-          rng,
-          twLen * 0.65,
-          leafA,
-          leafB,
-          rec.leafAlong,
-          rec.fruit,
-          rec.blossom,
-          bloom,
-        )
+        if ((tw3.userData.limbLen as number) >= 0.12) dress(tw3, tw3.userData.limbLen)
       }
     }
   }
@@ -532,6 +631,7 @@ function growSpruce(
   sp: SpeciesDef,
   rng: () => number,
   shape: PlantShape,
+  look: PlantSeasonLook,
 ): THREE.Group {
   const g = new THREE.Group()
   const rec = habitRecipe('spruce')
@@ -565,7 +665,7 @@ function growSpruce(
         curveBack: rec.droop,
         tipLift: 0.2,
       })
-      if (shape.showLeaves) {
+      if (shape.showLeaves && look.showLeaves) {
         const n = Math.max(3, Math.round(shape.leavesPerBranch * 0.42))
         for (let k = 0; k < n; k++) {
           addLeafCard(
@@ -601,6 +701,7 @@ function growPine(
   sp: SpeciesDef,
   rng: () => number,
   shape: PlantShape,
+  look: PlantSeasonLook,
 ): THREE.Group {
   const g = new THREE.Group()
   const rec = habitRecipe('pine')
@@ -640,7 +741,7 @@ function growPine(
         tilt: 0.35 + rng() * 0.25,
         yaw: rng() * Math.PI,
       })
-      if (shape.showLeaves) {
+      if (shape.showLeaves && look.showLeaves) {
         const tufts = 4 + Math.round(shape.leavesPerBranch * 0.45)
         for (let k = 0; k < tufts; k++) {
           const along = 0.35 + (k / tufts) * 0.6
@@ -690,6 +791,7 @@ function growThuja(
   sp: SpeciesDef,
   rng: () => number,
   shape: PlantShape,
+  look: PlantSeasonLook,
 ): THREE.Group {
   const g = new THREE.Group()
   const h = shape.height * (0.92 + rng() * 0.1)
@@ -716,7 +818,7 @@ function growThuja(
         yaw,
         segs: 6,
       })
-      if (!shape.showLeaves) continue
+      if (!shape.showLeaves || !look.showLeaves) continue
       const fans = 2 + Math.floor(shape.leavesPerBranch * 0.22)
       for (let k = 0; k < fans; k++) {
         addLeafCard(
@@ -743,16 +845,16 @@ function addLilacPanicle(
   scale: number,
   rng: () => number,
 ): void {
-  const n = 14 + Math.floor(rng() * 8)
+  const n = 22 + Math.floor(rng() * 10)
   for (let i = 0; i < n; i++) {
     const t = i / n
     addBlossomCard(
       parent,
       bloom,
-      (rng() - 0.5) * scale * 0.35,
-      y + t * scale * 0.85,
-      (rng() - 0.5) * scale * 0.35,
-      scale * 0.16 * (1 - t * 0.35),
+      (rng() - 0.5) * scale * 0.42,
+      y + t * scale,
+      (rng() - 0.5) * scale * 0.42,
+      scale * 0.22 * (1 - t * 0.28),
       rng() * Math.PI,
     )
   }
@@ -765,20 +867,108 @@ function addHydrangeaHead(
   scale: number,
   rng: () => number,
 ): void {
-  const n = 16 + Math.floor(rng() * 8)
+  const n = 22 + Math.floor(rng() * 10)
   for (let i = 0; i < n; i++) {
     const a = rng() * Math.PI * 2
     const b = rng() * Math.PI
-    const r = scale * 0.28 * Math.sqrt(rng())
+    const r = scale * 0.42 * Math.sqrt(rng())
     addBlossomCard(
       parent,
       bloom,
       Math.cos(a) * Math.sin(b) * r,
       y + Math.cos(b) * r,
       Math.sin(a) * Math.sin(b) * r,
-      scale * 0.14,
+      scale * 0.2,
       a,
     )
+  }
+}
+
+function addSpireaSpray(
+  parent: THREE.Object3D,
+  bloom: THREE.Material,
+  len: number,
+  rng: () => number,
+): void {
+  const n = 26 + Math.floor(rng() * 16)
+  for (let i = 0; i < n; i++) {
+    addBlossomCard(
+      parent,
+      bloom,
+      (rng() - 0.5) * 0.14,
+      len * (0.22 + rng() * 0.75),
+      (rng() - 0.5) * 0.14,
+      0.09 + rng() * 0.05,
+      rng() * Math.PI,
+    )
+  }
+}
+
+function dressShrubBloom(
+  tw: THREE.Object3D,
+  sp: SpeciesDef,
+  bloom: THREE.Material,
+  twLen: number,
+  rng: () => number,
+): void {
+  if (sp.key === 'spireaGrefsheim') {
+    addSpireaSpray(tw, bloom, twLen, rng)
+    return
+  }
+  if (sp.key === 'cornusAlba') {
+    addHydrangeaHead(tw, bloom, twLen * 0.86, 0.4 + rng() * 0.1, rng)
+    return
+  }
+  addHydrangeaHead(tw, bloom, twLen * 0.9, 0.5 + rng() * 0.12, rng)
+}
+
+function decorateEzBloom(
+  tree: THREE.Group,
+  sp: SpeciesDef,
+  seed: number,
+): void {
+  const rng = mulberry(seed * 131 + sp.key.length * 29)
+  const bloom = bloomMat(sp.flowerColor)
+  tree.updateMatrixWorld(true)
+  const box = new THREE.Box3().setFromObject(tree)
+  const size = new THREE.Vector3()
+  box.getSize(size)
+  if (size.y < 0.05) return
+  const min = box.min
+  const cluster = new THREE.Group()
+  cluster.name = 'season-bloom'
+  tree.add(cluster)
+  const local = new THREE.Vector3()
+  const place = (tMin: number) => {
+    local.set(
+      min.x + rng() * size.x,
+      min.y + size.y * (tMin + rng() * (1 - tMin)),
+      min.z + rng() * size.z,
+    )
+    tree.worldToLocal(local)
+    const g = new THREE.Group()
+    g.position.copy(local)
+    cluster.add(g)
+    return g
+  }
+  if (sp.key === 'ezBush1') {
+    const n = 10 + Math.floor(rng() * 5)
+    for (let i = 0; i < n; i++) {
+      addLilacPanicle(place(0.38), bloom, 0, 0.42 + rng() * 0.12, rng)
+    }
+    return
+  }
+  if (sp.key === 'ezBush2') {
+    const n = 9 + Math.floor(rng() * 5)
+    for (let i = 0; i < n; i++) {
+      addHydrangeaHead(place(0.42), bloom, 0, 0.48 + rng() * 0.12, rng)
+    }
+    return
+  }
+  const n = 24 + Math.floor(rng() * 12)
+  for (let i = 0; i < n; i++) {
+    const g = place(0.32)
+    addBlossomCard(g, bloom, 0, 0, 0, 0.18 + rng() * 0.08, rng() * Math.PI)
   }
 }
 
@@ -786,6 +976,7 @@ function growShrub(
   sp: SpeciesDef,
   rng: () => number,
   shape: PlantShape,
+  look: PlantSeasonLook,
 ): THREE.Group {
   const g = new THREE.Group()
   const rec = habitRecipe('shrub')
@@ -796,7 +987,10 @@ function growShrub(
   const bloom = bloomMat(sp.flowerColor)
   const stems = Math.max(4, Math.round(shape.trunks) + 2)
   const r0 = 0.016 * shape.trunkThickness
-  const lilac = sp.key === 'lilacBush'
+  const foliage = shape.showLeaves
+  const leaves = foliage && look.showLeaves
+  const blossom = foliage && look.blossom
+  const fruit = foliage ? fruitKind(false, look) : false
   for (let i = 0; i < stems; i++) {
     const yaw = (i / stems) * Math.PI * 2 + rng() * 0.25
     const tilt = deg(14 + rng() * shape.branchAngle)
@@ -811,13 +1005,11 @@ function growShrub(
         yaw: rng() * Math.PI * 2,
         segs: 6,
       })
-      dressBranch(tw, sp, shape, rng, twLen, leafA, leafB, 0.75, false, false, null)
-      if (shape.showLeaves) {
-        if (lilac) addLilacPanicle(tw, bloom, twLen * 0.85, 0.28 + rng() * 0.08, rng)
-        else addHydrangeaHead(tw, bloom, twLen * 0.9, 0.32 + rng() * 0.08, rng)
-      }
+      dressBranch(tw, sp, shape, rng, twLen, leafA, leafB, 0.75, fruit, false, null, leaves)
+      if (blossom) dressShrubBloom(tw, sp, bloom, twLen, rng)
     }
-    dressBranch(stem, sp, shape, rng, len, leafA, leafB, 0.7, false, false, null)
+    dressBranch(stem, sp, shape, rng, len, leafA, leafB, 0.7, fruit, false, null, leaves)
+    if (blossom && sp.key === 'spireaGrefsheim') addSpireaSpray(stem, bloom, len, rng)
   }
   return g
 }
@@ -838,6 +1030,7 @@ function growFlower(
   sp: SpeciesDef,
   rng: () => number,
   shape: PlantShape,
+  look: PlantSeasonLook,
 ): THREE.Group {
   const g = new THREE.Group()
   const h = shape.height * (0.9 + rng() * 0.14)
@@ -849,24 +1042,29 @@ function growFlower(
     roughness: 0.45,
     metalness: 0,
   })
+  const foliage = shape.showLeaves
+  const leaves = foliage && look.showLeaves
+  const blossom = foliage && look.blossom
 
   if (sp.key === 'gardenTulip') {
-    const stem = addLimb(g, stemMat, h, 0.008, 0.006, { segs: 6 })
-    const leaves = 2 + Math.floor(rng() * 2)
-    for (let i = 0; i < leaves; i++) {
-      addLeafCard(
-        g,
-        leaf,
-        'lance',
-        0,
-        h * (0.08 + i * 0.08),
-        0,
-        h * 0.85,
-        (i / leaves) * Math.PI * 2 + rng() * 0.3,
-        0.85 + rng() * 0.2,
-      )
+    const stem = addLimb(g, stemMat, leaves || blossom ? h : h * 0.22, 0.008, 0.006, { segs: 6 })
+    if (leaves) {
+      const n = 2 + Math.floor(rng() * 2)
+      for (let i = 0; i < n; i++) {
+        addLeafCard(
+          g,
+          leaf,
+          'lance',
+          0,
+          h * (0.08 + i * 0.08),
+          0,
+          h * 0.85,
+          (i / n) * Math.PI * 2 + rng() * 0.3,
+          0.85 + rng() * 0.2,
+        )
+      }
     }
-    addPetalBloom(stem, petal, eye, h * 0.92, h * 0.38, 1, 6, 0.55)
+    if (blossom) addPetalBloom(stem, petal, eye, h * 0.9, h * 0.55, 1, 6, 0.48)
     return g
   }
 
@@ -875,22 +1073,24 @@ function growFlower(
     for (let i = 0; i < stems; i++) {
       const yaw = (i / stems) * Math.PI * 2 + rng() * 0.4
       const tilt = 0.08 + rng() * 0.18
-      const len = h * (0.75 + rng() * 0.25)
+      const len = (leaves || blossom ? h : h * 0.28) * (0.75 + rng() * 0.25)
       const stem = addLimb(g, stemMat, len, 0.01, 0.006, { tilt, yaw, segs: 6 })
-      for (let k = 0; k < 4; k++) {
-        addLeafCard(
-          stem,
-          leaf,
-          'ovate',
-          (rng() - 0.5) * 0.08,
-          len * (0.2 + k * 0.16),
-          0,
-          0.22 + rng() * 0.06,
-          yaw + k,
-          0.55,
-        )
+      if (leaves) {
+        for (let k = 0; k < 4; k++) {
+          addLeafCard(
+            stem,
+            leaf,
+            'ovate',
+            (rng() - 0.5) * 0.08,
+            len * (0.2 + k * 0.16),
+            0,
+            0.22 + rng() * 0.06,
+            yaw + k,
+            0.55,
+          )
+        }
       }
-      addPetalBloom(stem, petal, eye, len * 0.95, 0.2 + rng() * 0.04, 3, 7, 0.72)
+      if (blossom) addPetalBloom(stem, petal, eye, len * 0.95, 0.3 + rng() * 0.05, 3, 7, 0.68)
     }
     return g
   }
@@ -910,12 +1110,14 @@ function growFlower(
         yaw: rng() * Math.PI * 2,
         segs: 5,
       })
-      addRoseLeaf(tw, leaf, twLen * 0.45, 0.16, rng() * Math.PI)
-      addPetalBloom(tw, petal, eye, twLen * 0.95, 0.14 + rng() * 0.03, 2, 6, 0.85)
+      if (leaves) addRoseLeaf(tw, leaf, twLen * 0.45, 0.16, rng() * Math.PI)
+      if (blossom) addPetalBloom(tw, petal, eye, twLen * 0.95, 0.22 + rng() * 0.04, 2, 6, 0.8)
     }
-    addRoseLeaf(cane, leaf, len * 0.45, 0.18, yaw)
-    addRoseLeaf(cane, leaf, len * 0.7, 0.16, yaw + 0.8)
-    addPetalBloom(cane, petal, eye, len * 0.96, 0.16 + rng() * 0.03, 2, 7, 0.82)
+    if (leaves) {
+      addRoseLeaf(cane, leaf, len * 0.45, 0.18, yaw)
+      addRoseLeaf(cane, leaf, len * 0.7, 0.16, yaw + 0.8)
+    }
+    if (blossom) addPetalBloom(cane, petal, eye, len * 0.96, 0.24 + rng() * 0.04, 2, 7, 0.78)
   }
   return g
 }
@@ -924,38 +1126,42 @@ export function growPlant(
   species: string,
   seed: number,
   shape?: Partial<PlantShape> | null,
+  month: number = DEFAULT_LANDSCAPE_MONTH,
 ): THREE.Group {
   const resolved = resolvePlantShape(species, shape)
-  const key = `habit5:${species}:${seed}:${plantShapeCacheKey(resolved)}`
+  const look = seasonLook(species, month)
+  const key = `habit10:${species}:${seed}:m${month}:${plantShapeCacheKey(resolved)}`
   const hit = cache.get(key)
   if (hit) return hit.clone(true)
 
-  const sp = speciesByKey(species)
-  if (sp.eztreePreset) {
-    return growEzTree(sp.eztreePreset, sp.key, seed, resolved)
-  }
-  const rng = mulberry(seed * 997 + species.length * 13)
+  const sp = seasonalSpecies(speciesByKey(species), look)
   let group: THREE.Group
-  switch (sp.habit) {
-    case 'spruce':
-      group = growSpruce(sp, rng, resolved)
-      break
-    case 'pine':
-      group = growPine(sp, rng, resolved)
-      break
-    case 'thuja':
-      group = growThuja(sp, rng, resolved)
-      break
-    case 'shrub':
-      group = growShrub(sp, rng, resolved)
-      break
-    case 'flower':
-      group = growFlower(sp, rng, resolved)
-      break
-    default:
-      group = growBroadleaf(sp, rng, resolved)
+  if (sp.eztreePreset) {
+    group = growEzTree(sp.eztreePreset, sp.key, seed, resolved, month)
+    if (resolved.showLeaves && look.blossom) decorateEzBloom(group, sp, seed)
+  } else {
+    const rng = mulberry(seed * 997 + species.length * 13)
+    switch (sp.habit) {
+      case 'spruce':
+        group = growSpruce(sp, rng, resolved, look)
+        break
+      case 'pine':
+        group = growPine(sp, rng, resolved, look)
+        break
+      case 'thuja':
+        group = growThuja(sp, rng, resolved, look)
+        break
+      case 'shrub':
+        group = growShrub(sp, rng, resolved, look)
+        break
+      case 'flower':
+        group = growFlower(sp, rng, resolved, look)
+        break
+      default:
+        group = growBroadleaf(sp, rng, resolved, look)
+    }
+    group.name = `seedthree:${sp.key}`
   }
-  group.name = `seedthree:${sp.key}`
   group.frustumCulled = false
   group.updateMatrixWorld(true)
   cache.set(key, group)

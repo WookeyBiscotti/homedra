@@ -12,7 +12,7 @@ import {
   tileFootprintSize,
   tileOverlapsOthers,
 } from './tiles'
-import { snapTileCenter } from './tileSnap'
+import { snapFillOriginToFaces, snapTileCenter } from './tileSnap'
 import {
   tileSurfaceContour,
   tilesOnSurface,
@@ -82,7 +82,11 @@ export function layoutTile(
     })
     tile = { ...tile, u: snapped.u, v: snapped.v }
   }
-  const clipped = applyTileClip(tile, contour)
+  const clipped = applyTileClip(tile, contour, {
+    blockers: existing,
+    groutM,
+    excludeIds,
+  })
   if (!clipped) return null
   if (tileOverlapsOthers(clipped, existing, excludeIds)) return null
   return clipped
@@ -97,6 +101,7 @@ export function fillTilesOnSurface(
   rotation: number,
   pattern: TileFillPattern,
   floor: Floor,
+  opts?: { limit?: number; snap?: boolean },
 ): PlacedTile[] {
   const contour = tileSurfaceContour(floor, surface, {
     u: originU,
@@ -104,7 +109,7 @@ export function fillTilesOnSurface(
   })
   if (!contour) return []
   const existing = tilesOnSurface(floor, surface)
-  const grid = alignFillOrigin(
+  const aligned = alignFillOrigin(
     spec,
     surface,
     originU,
@@ -113,11 +118,24 @@ export function fillTilesOnSurface(
     rotation,
     existing,
   )
-  const probe = createPlacedTile(spec, surface, grid.u, grid.v, groutM, rotation)
+  const probe = createPlacedTile(spec, surface, aligned.u, aligned.v, groutM, rotation)
   const size = tileFootprintSize(probe)
   const stepU = size.width + groutM
   const stepV = size.length + groutM
   if (stepU < 0.05 || stepV < 0.05) return []
+  const grid =
+    opts?.snap && existing.length === 0
+      ? snapFillOriginToFaces(
+          aligned.u,
+          aligned.v,
+          stepU,
+          stepV,
+          size.width / 2,
+          size.length / 2,
+          groutM,
+          contour,
+        )
+      : aligned
 
   const xs = contour.outer.map((p) => p.x)
   const ys = contour.outer.map((p) => p.y)
@@ -131,21 +149,30 @@ export function fillTilesOnSurface(
   const j0 = Math.floor((minV - grid.v) / stepV) - 1
   const j1 = Math.ceil((maxV - grid.v) / stepV) + 1
 
+  const clickI = Math.round((originU - grid.u) / stepU)
+  const clickJ = Math.round((originV - grid.v) / stepV)
+  const row0 = pattern === 'horizontal' ? clickJ : j0
+  const row1 = pattern === 'horizontal' ? clickJ : j1
+  const col0 = pattern === 'vertical' ? clickI : i0
+  const col1 = pattern === 'vertical' ? clickI : i1
+
   const placed: PlacedTile[] = []
-  const known = [...existing]
-  for (let j = j0; j <= j1; j++) {
+  const limit = opts?.limit
+  // Grid cells do not overlap. Only subtract tiles that were already on the
+  // surface — clipping each new cell against every sibling was O(n²).
+  for (let j = row0; j <= row1; j++) {
     const rowShift = pattern === 'offset' && (j & 1) === 1 ? stepU / 2 : 0
-    for (let i = i0; i <= i1; i++) {
+    for (let i = col0; i <= col1; i++) {
       const u = grid.u + i * stepU + rowShift
       const v = grid.v + j * stepV
       const tile = layoutTile(spec, surface, u, v, groutM, rotation, floor, {
         snap: false,
         contour,
-        existing: known,
+        existing,
       })
       if (!tile) continue
       placed.push(tile)
-      known.push(tile)
+      if (limit != null && placed.length >= limit) return placed
     }
   }
   return placed

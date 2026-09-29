@@ -29,6 +29,7 @@ describe('EZ-Tree presets', () => {
     expect(speciesByKey('ezJuniper').name).toBe('Можжевельник')
     expect(speciesByKey('ezYew').eztreeTune?.leafTint).toBe(0x7aaa58)
     expect(speciesByKey('ezJuniper').eztreeTune?.leafTint).toBe(0x6a8a78)
+    expect(speciesByKey('leylandGoldRider').eztreePreset).toBe('Pine Medium')
     expect(speciesByKey('gardenRose').eztreePreset).toBeUndefined()
   })
 
@@ -38,6 +39,7 @@ describe('EZ-Tree presets', () => {
     expect(defaultPlantShape('ponderosaPine').height).toBe(14)
     expect(defaultPlantShape('ezYew').height).toBe(5.5)
     expect(defaultPlantShape('ezJuniper').height).toBe(3.4)
+    expect(defaultPlantShape('leylandGoldRider').height).toBe(9)
     expect(defaultPlantShape('ezBush3').height).toBe(2.2)
     expect(defaultPlantShape('ezTrellis').height).toBe(3.8)
     expect(defaultPlantShape('ezPineLarge').height).toBe(18)

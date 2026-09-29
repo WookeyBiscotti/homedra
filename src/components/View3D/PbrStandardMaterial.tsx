@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import * as THREE from 'three'
-import type { MaterialRef } from '../../engine/types'
+import type { MaterialRef, TileTexRegion } from '../../engine/types'
 import {
+  applyCeramicTileRepeat,
   applyTileRepeat,
   DEFAULT_DISPLACEMENT_SCALE,
-  loadPbrMaps,
+  loadCeramicPbrMaps,
+  loadFinishPbrMaps,
   type LoadedPbrMaps,
 } from '../../materials/ambientcg'
 
@@ -14,6 +16,10 @@ export function usePbrMaps(
   meterUvs = false,
   worldWidthM = 1,
   worldHeightM = 1,
+  texRegion?: TileTexRegion | null,
+  ceramicStamp = false,
+  faceWidthM = 1,
+  faceHeightM = 1,
 ): {
   maps: LoadedPbrMaps | null
   status: 'idle' | 'loading' | 'ok' | 'error'
@@ -22,7 +28,24 @@ export function usePbrMaps(
   const [status, setStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>(
     'idle',
   )
+  const regionKey = texRegion
+    ? `${texRegion.u0}:${texRegion.v0}:${texRegion.u1}:${texRegion.v1}`
+    : 'full'
+  const tileSizeM = material?.tileSizeM
 
+  const applyMaps = (m: LoadedPbrMaps) => {
+    if (ceramicStamp) {
+      // Image is already the picker crop — do not apply region again.
+      applyCeramicTileRepeat(m, faceWidthM, faceHeightM)
+      return
+    }
+    const u = meterUvs ? 1 : worldWidthM
+    const v = meterUvs ? 1 : worldHeightM
+    // Crop is baked into the image when texRegion is set — tile the full stamp.
+    applyTileRepeat(m, tileSizeM ?? 1.5, u, v)
+  }
+
+  // Reload when image identity or baked crop changes. Tile size only adjusts repeat.
   useEffect(() => {
     if (!material) {
       setMaps(null)
@@ -31,12 +54,13 @@ export function usePbrMaps(
     }
     let alive = true
     setStatus('loading')
-    loadPbrMaps(material)
+    const pending = ceramicStamp
+      ? loadCeramicPbrMaps(material, texRegion, faceWidthM, faceHeightM)
+      : loadFinishPbrMaps(material, texRegion)
+    pending
       .then((m) => {
         if (!alive) return
-        const u = meterUvs ? 1 : worldWidthM
-        const v = meterUvs ? 1 : worldHeightM
-        applyTileRepeat(m, material.tileSizeM, u, v)
+        if (!ceramicStamp) applyMaps(m)
         setMaps(m)
         setStatus('ok')
       })
@@ -53,18 +77,16 @@ export function usePbrMaps(
     material?.source,
     material?.assetId,
     material?.url,
-    material?.tileSizeM,
-    meterUvs,
-    worldWidthM,
-    worldHeightM,
+    ceramicStamp,
+    regionKey,
+    ceramicStamp ? faceWidthM : 0,
+    ceramicStamp ? faceHeightM : 0,
   ])
 
   useEffect(() => {
-    if (!maps || !material) return
-    const u = meterUvs ? 1 : worldWidthM
-    const v = meterUvs ? 1 : worldHeightM
-    applyTileRepeat(maps, material.tileSizeM, u, v)
-  }, [maps, material?.tileSizeM, meterUvs, worldWidthM, worldHeightM])
+    if (!maps || !material || ceramicStamp) return
+    applyMaps(maps)
+  }, [maps, tileSizeM, meterUvs, worldWidthM, worldHeightM, ceramicStamp])
 
   return { maps, status }
 }
@@ -82,6 +104,11 @@ export function PbrStandardMaterial({
   meterUvs = false,
   worldWidthM,
   worldHeightM,
+  texRegion,
+  ceramicStamp = false,
+  faceWidthM,
+  faceHeightM,
+  vertexDisplacement = true,
 }: {
   material?: MaterialRef | null
   color?: string
@@ -95,24 +122,42 @@ export function PbrStandardMaterial({
   meterUvs?: boolean
   worldWidthM?: number
   worldHeightM?: number
+  texRegion?: TileTexRegion | null
+  /** Ceramic tile: one stamp of the image on the 0–1 face, ignore tileSizeM. */
+  ceramicStamp?: boolean
+  faceWidthM?: number
+  faceHeightM?: number
+  /** Off for structural meshes — height maps must not lift the solid. */
+  vertexDisplacement?: boolean
 }) {
+  const effectiveRegion = texRegion ?? material?.texRegion
   const { maps, status } = usePbrMaps(
     material,
     meterUvs,
     worldWidthM ?? 1,
     worldHeightM ?? 1,
+    effectiveRegion,
+    ceramicStamp,
+    faceWidthM ?? 1,
+    faceHeightM ?? 1,
   )
 
   const hasMap = !!maps?.map
+  const nScale = material?.normalScale ?? 0.85
+  const disp =
+    vertexDisplacement && maps?.displacementMap
+      ? (material?.displacementScale ?? DEFAULT_DISPLACEMENT_SCALE)
+      : 0
   const displayColor =
     status === 'loading'
       ? '#c4b08a'
       : status === 'error'
         ? '#c45c26'
         : hasMap
-          ? '#ffffff'
-          : color
+          ? (material?.tint ?? '#ffffff')
+          : (material?.tint ?? color)
 
+  // Remount when loaded maps change (image and/or baked crop).
   const mapKey = [
     material ? `${material.source}:${material.assetId}` : 'none',
     status,
@@ -121,10 +166,8 @@ export function PbrStandardMaterial({
     maps?.roughnessMap ? 'r' : '',
     maps?.metalnessMap ? 'me' : '',
     maps?.aoMap ? 'ao' : '',
-    maps?.displacementMap ? 'd' : '',
-    maps?.displacementMap
-      ? String(material?.displacementScale ?? DEFAULT_DISPLACEMENT_SCALE)
-      : '',
+    `r:${effectiveRegion?.u0 ?? 0}:${effectiveRegion?.v0 ?? 0}:${effectiveRegion?.u1 ?? 1}:${effectiveRegion?.v1 ?? 1}`,
+    disp > 0 ? 'd' : '',
   ].join('-')
 
   return (
@@ -137,19 +180,21 @@ export function PbrStandardMaterial({
       roughnessMap={maps?.roughnessMap ?? undefined}
       metalnessMap={maps?.metalnessMap ?? undefined}
       aoMap={maps?.aoMap ?? undefined}
-      displacementMap={maps?.displacementMap ?? undefined}
-      displacementScale={
-        maps?.displacementMap
-          ? (material?.displacementScale ?? DEFAULT_DISPLACEMENT_SCALE)
-          : 0
+      displacementMap={
+        vertexDisplacement && disp > 0
+          ? (maps?.displacementMap ?? undefined)
+          : undefined
       }
+      displacementScale={disp}
       normalScale={
-        maps?.normalMap ? new THREE.Vector2(0.85, 0.85) : undefined
+        maps?.normalMap ? new THREE.Vector2(nScale, nScale) : undefined
       }
-      roughness={maps?.roughnessMap ? 1 : 0.75}
-      metalness={maps?.metalnessMap ? 1 : 0}
-      aoMapIntensity={maps?.aoMap ? 1 : 0}
-      envMapIntensity={0.75}
+      roughness={material?.roughness ?? (maps?.roughnessMap ? 1 : 0.75)}
+      metalness={material?.metalness ?? (maps?.metalnessMap ? 1 : 0)}
+      aoMapIntensity={
+        maps?.aoMap ? (material?.aoMapIntensity ?? 1) : 0
+      }
+      envMapIntensity={material?.envMapIntensity ?? 0.75}
       transparent={transparent}
       opacity={opacity}
       side={side}

@@ -1,5 +1,5 @@
 import type { LandscapeFrame } from './maps'
-import { brushWeight, stampScalar, uvToPlan } from './maps'
+import { brushWeight, frameSizeX, frameSizeY, stampScalar, uvToPlan } from './maps'
 
 /** Paint splat R/G/B weights (layers 1..3). Layer 0 is the remainder. */
 export function stampSplat(
@@ -16,12 +16,14 @@ export function stampSplat(
   locked?: Uint8Array,
 ): void {
   const amt = Math.max(0, Math.min(1, strength))
-  const half = frame.size / 2
-  const cell = frame.size / Math.max(1, res - 1)
-  const i0 = Math.max(0, Math.floor((cx - radius - (frame.originX - half)) / cell) - 1)
-  const i1 = Math.min(res - 1, Math.ceil((cx + radius - (frame.originX - half)) / cell) + 1)
-  const j0 = Math.max(0, Math.floor((cy - radius - (frame.originY - half)) / cell) - 1)
-  const j1 = Math.min(res - 1, Math.ceil((cy + radius - (frame.originY - half)) / cell) + 1)
+  const sx = frameSizeX(frame)
+  const sy = frameSizeY(frame)
+  const cellX = sx / Math.max(1, res - 1)
+  const cellY = sy / Math.max(1, res - 1)
+  const i0 = Math.max(0, Math.floor((cx - radius - (frame.originX - sx / 2)) / cellX) - 1)
+  const i1 = Math.min(res - 1, Math.ceil((cx + radius - (frame.originX - sx / 2)) / cellX) + 1)
+  const j0 = Math.max(0, Math.floor((cy - radius - (frame.originY - sy / 2)) / cellY) - 1)
+  const j1 = Math.min(res - 1, Math.ceil((cy + radius - (frame.originY - sy / 2)) / cellY) + 1)
   for (let j = j0; j <= j1; j++) {
     for (let i = i0; i <= i1; i++) {
       if (locked && locked[j * res + i]) continue

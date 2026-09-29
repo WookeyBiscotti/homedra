@@ -6,6 +6,7 @@ import { Tree } from '@dgreenheck/ez-tree'
 import * as THREE from 'three'
 import type { PlantShape } from '../engine/types'
 import { defaultPlantShape, plantShapeCacheKey } from './plantShape'
+import { DEFAULT_LANDSCAPE_MONTH, seasonLook } from './season'
 import { speciesByKey } from './species'
 
 const cache = new Map<string, THREE.Group>()
@@ -74,17 +75,30 @@ export function growEzTree(
   species: string,
   seed: number,
   shape: PlantShape,
+  month: number = DEFAULT_LANDSCAPE_MONTH,
 ): THREE.Group {
-  const key = `ez1:${preset}:${species}:${seed}:${plantShapeCacheKey(shape)}`
+  const season = seasonLook(species, month)
+  const grown = {
+    ...shape,
+    showLeaves: shape.showLeaves && season.showLeaves,
+  }
+  const key = `ez2:${preset}:${species}:${seed}:m${month}:${plantShapeCacheKey(grown)}`
   const hit = cache.get(key)
   if (hit) return hit.clone(true)
 
   const tree = new Tree()
   tree.loadPreset(preset)
-  const look = speciesByKey(species).eztreeTune
-  if (look?.leafTint !== undefined) tree.options.leaves.tint = look.leafTint
-  if (look?.barkTint !== undefined) tree.options.bark.tint = look.barkTint
-  tuneFromShape(tree, species, seed, shape)
+  const tune = speciesByKey(species).eztreeTune
+  if (season.leafTint !== undefined) tree.options.leaves.tint = season.leafTint
+  else if (tune?.leafTint !== undefined) tree.options.leaves.tint = tune.leafTint
+  if (tune?.barkTint !== undefined) tree.options.bark.tint = tune.barkTint
+  tuneFromShape(tree, species, seed, grown)
+  if (season.blossom && grown.showLeaves && tree.options.leaves.count > 0) {
+    tree.options.leaves.count = Math.max(
+      4,
+      Math.round(tree.options.leaves.count * 0.48),
+    )
+  }
   tree.generate()
   tree.traverse((obj) => {
     obj.frustumCulled = false

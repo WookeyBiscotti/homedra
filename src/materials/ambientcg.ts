@@ -1,4 +1,10 @@
-import type { MaterialRef } from '../engine/types'
+import {
+  isFullTexRegion,
+  normalizeTileTexRegion,
+  type MaterialRef,
+  type TileTexRegion,
+} from '../engine/types'
+import { cropImageToCanvas } from './cropImage'
 import { fetchTextureBlob, getLocalTexture } from './customTextures'
 import { resolvePolyHavenMaps } from './catalogs/polyhavenTextures'
 import { ensureDisplacementMap } from './heightFromNormal'
@@ -222,9 +228,10 @@ async function loadCustomMaps(ref: MaterialRef): Promise<LoadedPbrMaps> {
   if (!blob) {
     throw new Error(`Custom texture ${ref.assetId} not found`)
   }
-  const map = await textureFromBlob(blob, true)
+  const src = await textureFromBlob(blob, true)
+  const map = src.clone()
+  map.needsUpdate = true
   const maps: LoadedPbrMaps = { map }
-  applyTileRepeat(maps, ref.tileSizeM)
   return maps
 }
 
@@ -256,15 +263,55 @@ export interface LoadedPbrMaps {
   displacementMap?: THREE.Texture
 }
 
+function cloneTexture(src: THREE.Texture): THREE.Texture {
+  const tex = src.clone()
+  tex.wrapS = THREE.RepeatWrapping
+  tex.wrapT = THREE.RepeatWrapping
+  tex.needsUpdate = true
+  return tex
+}
+
+function cloneLoadedMaps(maps: LoadedPbrMaps): LoadedPbrMaps {
+  return {
+    map: cloneTexture(maps.map),
+    normalMap: maps.normalMap ? cloneTexture(maps.normalMap) : undefined,
+    roughnessMap: maps.roughnessMap ? cloneTexture(maps.roughnessMap) : undefined,
+    metalnessMap: maps.metalnessMap ? cloneTexture(maps.metalnessMap) : undefined,
+    aoMap: maps.aoMap ? cloneTexture(maps.aoMap) : undefined,
+    displacementMap: maps.displacementMap
+      ? cloneTexture(maps.displacementMap)
+      : undefined,
+  }
+}
+
+function materialMapsKey(ref: MaterialRef): string {
+  // Tile size / crop are applied per mesh via applyTileRepeat — keep them out
+  // of the shared load cache so slider edits do not refetch maps.
+  return `${ref.source}:${ref.assetId}:${ref.url ?? ''}`
+}
+
+const sharedPbrCache = new Map<string, Promise<LoadedPbrMaps>>()
+const cropMapsCache = new Map<string, LoadedPbrMaps>()
+const ceramicMapsCache = new Map<string, Promise<LoadedPbrMaps>>()
+
+function getSharedPbrMaps(ref: MaterialRef): Promise<LoadedPbrMaps> {
+  const key = materialMapsKey(ref)
+  let pending = sharedPbrCache.get(key)
+  if (!pending) {
+    pending = loadPbrMapsFresh(ref)
+    sharedPbrCache.set(key, pending)
+  }
+  return pending
+}
+
 async function loadUrlMaps(ref: MaterialRef): Promise<LoadedPbrMaps> {
   if (!ref.url) throw new Error(`Нет URL текстуры ${ref.assetId}`)
   const candidates = [...new Set([proxiedAssetUrl(ref.url), proxiedTextureUrl(ref.url)])]
   let lastErr: unknown
   for (const url of candidates) {
     try {
-      const map = await loadTextureFromUrl(url, true)
+      const map = cloneTexture(await loadTextureFromUrl(url, true))
       const maps: LoadedPbrMaps = { map }
-      applyTileRepeat(maps, ref.tileSizeM)
       return maps
     } catch (e) {
       lastErr = e
@@ -275,31 +322,35 @@ async function loadUrlMaps(ref: MaterialRef): Promise<LoadedPbrMaps> {
 
 async function loadPolyHavenPbr(ref: MaterialRef): Promise<LoadedPbrMaps> {
   const urls = await resolvePolyHavenMaps(ref.assetId)
-  const map = await loadTextureFromUrl(proxiedAssetUrl(urls.color), true)
+  const map = cloneTexture(
+    await loadTextureFromUrl(proxiedAssetUrl(urls.color), true),
+  )
   const [normalMap, roughnessMap, metalnessMap, aoMap, displacementMap] =
     await Promise.all([
       urls.normal
-        ? loadTextureFromUrl(proxiedAssetUrl(urls.normal), false).catch(
-            () => undefined,
-          )
+        ? loadTextureFromUrl(proxiedAssetUrl(urls.normal), false)
+            .then(cloneTexture)
+            .catch(() => undefined)
         : undefined,
       urls.roughness
-        ? loadTextureFromUrl(proxiedAssetUrl(urls.roughness), false).catch(
-            () => undefined,
-          )
+        ? loadTextureFromUrl(proxiedAssetUrl(urls.roughness), false)
+            .then(cloneTexture)
+            .catch(() => undefined)
         : undefined,
       urls.metalness
-        ? loadTextureFromUrl(proxiedAssetUrl(urls.metalness), false).catch(
-            () => undefined,
-          )
+        ? loadTextureFromUrl(proxiedAssetUrl(urls.metalness), false)
+            .then(cloneTexture)
+            .catch(() => undefined)
         : undefined,
       urls.ao
-        ? loadTextureFromUrl(proxiedAssetUrl(urls.ao), false).catch(() => undefined)
+        ? loadTextureFromUrl(proxiedAssetUrl(urls.ao), false)
+            .then(cloneTexture)
+            .catch(() => undefined)
         : undefined,
       urls.displacement
-        ? loadTextureFromUrl(proxiedAssetUrl(urls.displacement), false).catch(
-            () => undefined,
-          )
+        ? loadTextureFromUrl(proxiedAssetUrl(urls.displacement), false)
+            .then(cloneTexture)
+            .catch(() => undefined)
         : undefined,
     ])
   const maps: LoadedPbrMaps = {
@@ -311,11 +362,10 @@ async function loadPolyHavenPbr(ref: MaterialRef): Promise<LoadedPbrMaps> {
     displacementMap,
   }
   ensureDisplacementMap(maps)
-  applyTileRepeat(maps, ref.tileSizeM)
   return maps
 }
 
-export async function loadPbrMaps(ref: MaterialRef): Promise<LoadedPbrMaps> {
+async function loadPbrMapsFresh(ref: MaterialRef): Promise<LoadedPbrMaps> {
   if (ref.source === 'custom') return loadCustomMaps(ref)
   if (ref.source === 'polyhaven') return loadPolyHavenPbr(ref)
   if (ref.source === 'pixabay' || ref.source === 'pexels') return loadUrlMaps(ref)
@@ -366,13 +416,77 @@ export async function loadPbrMaps(ref: MaterialRef): Promise<LoadedPbrMaps> {
     displacementMap,
   }
   ensureDisplacementMap(maps)
-  applyTileRepeat(maps, ref.tileSizeM)
   return maps
+}
+
+/** Unique clones so wall/floor finishes can set repeat without fighting. */
+export async function loadPbrMaps(ref: MaterialRef): Promise<LoadedPbrMaps> {
+  return cloneLoadedMaps(await getSharedPbrMaps(ref))
+}
+
+const finishCropCache = new Map<string, Promise<LoadedPbrMaps>>()
+
+/**
+ * Wall/floor finish maps. A non-full texRegion is baked into the image so
+ * RepeatWrapping tiles only the selected crop (UV offset alone leaves black
+ * stripes from the rest of the atlas).
+ */
+export async function loadFinishPbrMaps(
+  ref: MaterialRef,
+  region?: TileTexRegion | null,
+): Promise<LoadedPbrMaps> {
+  if (isFullTexRegion(region)) {
+    return cloneLoadedMaps(await getSharedPbrMaps(ref))
+  }
+  const r = normalizeTileTexRegion(region)
+  const key = `${materialMapsKey(ref)}:${r.u0}:${r.v0}:${r.u1}:${r.v1}`
+  let pending = finishCropCache.get(key)
+  if (!pending) {
+    pending = getSharedPbrMaps(ref).then((maps) => cropPbrMaps(maps, region))
+    finishCropCache.set(key, pending)
+  }
+  return cloneLoadedMaps(await pending)
+}
+
+/** Shared stamp for every ceramic tile with the same material / crop / size. */
+export async function loadCeramicPbrMaps(
+  ref: MaterialRef,
+  region: TileTexRegion | null | undefined,
+  faceWidthM: number,
+  faceHeightM: number,
+): Promise<LoadedPbrMaps> {
+  const r = normalizeTileTexRegion(region)
+  const key = `${materialMapsKey(ref)}:${r.u0}:${r.v0}:${r.u1}:${r.v1}:${faceWidthM}:${faceHeightM}`
+  let pending = ceramicMapsCache.get(key)
+  if (!pending) {
+    pending = getSharedPbrMaps(ref).then((maps) => {
+      const cropped = cropPbrMaps(maps, region)
+      const copy = cloneLoadedMaps(cropped)
+      applyCeramicTileRepeat(copy, faceWidthM, faceHeightM)
+      return copy
+    })
+    ceramicMapsCache.set(key, pending)
+  }
+  return pending
+}
+
+function textureImageAspect(tex?: THREE.Texture): number {
+  const img = tex?.image as
+    | { width?: number; height?: number; videoWidth?: number; videoHeight?: number }
+    | undefined
+  if (!img) return 1
+  const w = img.width || img.videoWidth || 0
+  const h = img.height || img.videoHeight || 0
+  if (w < 1 || h < 1) return 1
+  return w / h
 }
 
 /**
  * Apply tile size. For meter-based UVs use uScale=vScale=1.
  * For 0–1 mesh UVs pass world width/height in meters as uScale/vScale.
+ * Image aspect is honored so a wide photo is not squashed into a square.
+ * Crop first with cropPbrMaps / loadFinishPbrMaps — do not pass a UV region
+ * here; RepeatWrapping would sample outside the selection.
  */
 export function applyTileRepeat(
   maps: LoadedPbrMaps,
@@ -380,8 +494,10 @@ export function applyTileRepeat(
   uScale = 1,
   vScale = 1,
 ) {
-  const sx = uScale / Math.max(0.05, tileSizeM)
-  const sy = vScale / Math.max(0.05, tileSizeM)
+  const tile = Math.max(0.05, tileSizeM)
+  const aspect = textureImageAspect(maps.map)
+  const sx = uScale / tile
+  const sy = (vScale * aspect) / tile
   for (const t of [
     maps.map,
     maps.normalMap,
@@ -391,7 +507,74 @@ export function applyTileRepeat(
     maps.displacementMap,
   ]) {
     if (!t) continue
+    t.wrapS = THREE.RepeatWrapping
+    t.wrapT = THREE.RepeatWrapping
     t.repeat.set(sx, sy)
-    t.needsUpdate = true
+    t.offset.set(0, 0)
+    // Do NOT set needsUpdate — that re-uploads the image to the GPU.
+    // repeat/offset only need the UV matrix.
+    t.updateMatrix()
   }
+}
+
+/**
+ * One print of the (already cropped) image on a ceramic tile whose mesh UVs are 0–1.
+ * `tileSizeM` is ignored — the face itself is the stamp.
+ */
+export function applyCeramicTileRepeat(
+  maps: LoadedPbrMaps,
+  tileWidthM: number,
+  tileHeightM: number,
+) {
+  const w = Math.max(1e-4, tileWidthM)
+  const h = Math.max(1e-4, tileHeightM)
+  applyTileRepeat(maps, 1, 1, h / w)
+}
+
+function cropOneTexture(
+  src: THREE.Texture,
+  region?: TileTexRegion | null,
+): THREE.Texture {
+  const image = src.image as CanvasImageSource | undefined
+  if (!image) return src
+  const canvas = cropImageToCanvas(image, region)
+  if (!canvas) return src
+  const cropped = new THREE.Texture(canvas)
+  cropped.colorSpace = src.colorSpace
+  cropped.flipY = src.flipY
+  cropped.wrapS = THREE.RepeatWrapping
+  cropped.wrapT = THREE.RepeatWrapping
+  cropped.magFilter = src.magFilter
+  cropped.minFilter = src.minFilter
+  cropped.anisotropy = src.anisotropy
+  cropped.offset.set(0, 0)
+  cropped.repeat.set(1, 1)
+  cropped.needsUpdate = true
+  return cropped
+}
+
+/**
+ * Bake the picker region into a new image so wrapping never samples
+ * pixels outside the selection (tall wall tiles used to leak).
+ */
+export function cropPbrMaps(
+  maps: LoadedPbrMaps,
+  region?: TileTexRegion | null,
+): LoadedPbrMaps {
+  if (isFullTexRegion(region)) return maps
+  const r = normalizeTileTexRegion(region)
+  const key = `${maps.map.uuid}:${r.u0}:${r.v0}:${r.u1}:${r.v1}`
+  const hit = cropMapsCache.get(key)
+  if (hit) return hit
+  const crop = (tex?: THREE.Texture) => (tex ? cropOneTexture(tex, region) : tex)
+  const cropped: LoadedPbrMaps = {
+    map: cropOneTexture(maps.map, region),
+    normalMap: crop(maps.normalMap),
+    roughnessMap: crop(maps.roughnessMap),
+    metalnessMap: crop(maps.metalnessMap),
+    aoMap: crop(maps.aoMap),
+    displacementMap: crop(maps.displacementMap),
+  }
+  cropMapsCache.set(key, cropped)
+  return cropped
 }

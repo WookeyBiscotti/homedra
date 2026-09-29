@@ -1,7 +1,93 @@
 import type { LandscapeGrassLayer, PlantShape } from '../engine/types'
-import { SEEDTHREE_GRASS_DEFAULTS } from '../engine/types'
+import { LANDSCAPE_GRASS_DEFAULTS } from '../engine/types'
+import { EZ_GRASS_WIND } from '../landscape/ezGrass'
 import { MAX_GRASS_LAYERS } from '../landscape/grassLayers'
 import { CROWN_SHAPE_OPTIONS } from '../landscape/plantShape'
+import { frameSizeX, frameSizeY } from '../landscape/maps'
+import {
+  PLOT_MAX_M,
+  PLOT_MIN_M,
+  houseOffsetOnPlot,
+  plotFrame,
+} from '../landscape/site'
+import { useBuildingStore } from '../store/buildingStore'
+
+export function SitePlotFields() {
+  const building = useBuildingStore((s) => s.building)
+  const terrain = building.floors.find((f) => f.kind === 'ground')?.landscapeTerrain
+  const frame = plotFrame(terrain)
+  const offset = houseOffsetOnPlot(building, frame)
+  const setLandscapePlot = useBuildingStore((s) => s.setLandscapePlot)
+  const setHouseOffsetOnPlot = useBuildingStore((s) => s.setHouseOffsetOnPlot)
+  const centerHouseOnPlot = useBuildingStore((s) => s.centerHouseOnPlot)
+  const preview = useBuildingStore((s) => s.siteHousePreview)
+  const liveOffset = {
+    x: offset.x + (preview?.dx ?? 0),
+    y: offset.y + (preview?.dy ?? 0),
+  }
+
+  return (
+    <div className="landscape-fields site-plot-fields">
+      <label>
+        Ширина участка, м
+        <input
+          type="number"
+          min={PLOT_MIN_M}
+          max={PLOT_MAX_M}
+          step={0.5}
+          value={Number(frameSizeX(frame).toFixed(2))}
+          onChange={(e) =>
+            setLandscapePlot({ sizeX: Number(e.target.value) })
+          }
+        />
+      </label>
+      <label>
+        Длина участка, м
+        <input
+          type="number"
+          min={PLOT_MIN_M}
+          max={PLOT_MAX_M}
+          step={0.5}
+          value={Number(frameSizeY(frame).toFixed(2))}
+          onChange={(e) =>
+            setLandscapePlot({ sizeY: Number(e.target.value) })
+          }
+        />
+      </label>
+      <label>
+        Дом от центра X, м
+        <input
+          type="number"
+          step={0.1}
+          value={Number(liveOffset.x.toFixed(2))}
+          onChange={(e) =>
+            setHouseOffsetOnPlot(Number(e.target.value), liveOffset.y)
+          }
+        />
+      </label>
+      <label>
+        Дом от центра Y, м
+        <input
+          type="number"
+          step={0.1}
+          value={Number(liveOffset.y.toFixed(2))}
+          onChange={(e) =>
+            setHouseOffsetOnPlot(liveOffset.x, Number(e.target.value))
+          }
+        />
+      </label>
+      <button type="button" className="tool-btn site-center-btn" onClick={centerHouseOnPlot}>
+        <span className="tool-btn-main">
+          <span>Дом по центру</span>
+        </span>
+      </button>
+      <p className="hint">
+        В 3D: тяните край участка или сам дом. Рельеф и растения остаются на
+        месте.
+      </p>
+    </div>
+  )
+}
 
 export function PlantShapeFields({
   value,
@@ -344,8 +430,8 @@ export function GrassFields({
         />
       </label>
       <p className="hint">
-        Дефолты SeedThree: высота {SEEDTHREE_GRASS_DEFAULTS.height} м, ширина{' '}
-        {SEEDTHREE_GRASS_DEFAULTS.width}, alpha {SEEDTHREE_GRASS_DEFAULTS.alphaTest}.
+        Пучок EZ-Tree (`grass.glb`): высота {LANDSCAPE_GRASS_DEFAULTS.height} м, ширина{' '}
+        {LANDSCAPE_GRASS_DEFAULTS.width}, alpha {EZ_GRASS_WIND.alphaTest}.
       </p>
     </div>
   )

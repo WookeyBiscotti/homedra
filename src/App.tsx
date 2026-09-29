@@ -197,7 +197,12 @@ export default function App() {
         redo()
         return
       }
-      if (mod && (key === 'd' || key === 'c') && selection?.kind === 'object') {
+      if (
+        mod &&
+        (key === 'd' || key === 'c') &&
+        workbench === 'furnish' &&
+        selection?.kind === 'object'
+      ) {
         e.preventDefault()
         copySelectedObject()
         return
@@ -262,8 +267,7 @@ export default function App() {
           r: 'paintGrass',
         }
         if (
-          selection &&
-          (selection.kind === 'object' || selection.kind === 'plant') &&
+          selection?.kind === 'plant' &&
           (key === 'g' || key === 'k' || key === 'y')
         ) {
           e.preventDefault()

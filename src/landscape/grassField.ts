@@ -1,8 +1,8 @@
 import type { LandscapeFrame } from './maps'
-import { pointInRing, uvToPlan } from './maps'
+import { frameSizeX, frameSizeY, pointInRing, uvToPlan } from './maps'
 import { heightAt } from './terrain'
 import {
-  SEEDTHREE_GRASS_DEFAULTS,
+  LANDSCAPE_GRASS_DEFAULTS,
   type LandscapeGrassLayer,
   type LandscapePlant,
   type LandscapeTerrain,
@@ -21,7 +21,6 @@ export type GrassTuft = {
   tintR: number
   tintG: number
   tintB: number
-  variant: 0 | 1
 }
 
 function hash(n: number): number {
@@ -46,9 +45,10 @@ export function layoutGrass(opts: {
   const density = opts.grass.density
   const h = opts.grass.height
   const seed = opts.grass.seed
-  const width = opts.grass.width ?? SEEDTHREE_GRASS_DEFAULTS.width
-  const cell = opts.frame.size / res
-  const area = cell * cell
+  const width = opts.grass.width ?? LANDSCAPE_GRASS_DEFAULTS.width
+  const cellX = frameSizeX(opts.frame) / res
+  const cellY = frameSizeY(opts.frame) / res
+  const area = cellX * cellY
   const perCell = density * area
   const out: GrassTuft[] = []
   const plants = opts.plants ?? []
@@ -69,8 +69,8 @@ export function layoutGrass(opts: {
         const rnd = hash(seed * 17 + i * 131 + j * 917 + k * 53)
         const rnd2 = hash(rnd * 1000 + 3)
         const rnd3 = hash(rnd2 * 1000 + 7)
-        const x = base.x + (rnd - 0.5) * cell
-        const y = base.y + (rnd2 - 0.5) * cell
+        const x = base.x + (rnd - 0.5) * cellX
+        const y = base.y + (rnd2 - 0.5) * cellY
         if (opts.holes.some((ring) => pointInRing(x, y, ring))) continue
         if (
           plants.some((p) => Math.hypot(p.x - x, p.y - y) < 0.4 * p.scale)
@@ -78,21 +78,22 @@ export function layoutGrass(opts: {
           continue
         }
         const hy = opts.groundY + heightAt(opts.terrain, x, y) - 0.02
-        const tall = rnd3 > 0.62
-        const hh = h * (0.7 + rnd * 0.55) * (tall ? 1.4 : 1)
-        const spread = width * (0.8 + rnd2 * 0.4)
+        // EZ-Tree sizeVariation: y swings more than x/z.
+        const hh = h * (0.7 + rnd * 0.55)
+        const spreadX = width * (0.8 + rnd2 * 0.4)
+        const spreadZ = width * (0.8 + rnd3 * 0.4)
         out.push({
           x,
           y: hy,
           z: -y,
           yaw: rnd * Math.PI * 2,
-          sx: hh * spread,
+          sx: hh * spreadX,
           sy: hh,
-          sz: hh * width * (0.8 + rnd3 * 0.4),
-          tintR: 0.55 + rnd * 0.4,
-          tintG: 0.7 + rnd2 * 0.45,
-          tintB: 0.4 + rnd3 * 0.25,
-          variant: tall ? 1 : 0,
+          sz: hh * spreadZ,
+          // EZ-Tree instanceColor greens, as multipliers on the layer tint.
+          tintR: 0.85 + rnd * 0.2,
+          tintG: 0.7 + rnd2 * 0.55,
+          tintB: 0.9 + rnd3 * 0.12,
         })
       }
     }

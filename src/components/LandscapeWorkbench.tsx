@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { MaterialRef, SculptMode, Tool } from '../engine/types'
 import { TextureSourceTabs } from './CustomTextureLibrary'
+import { MaterialPbrFields } from './PbrMaterialEditor'
 import { useMaterialThumb } from './TextureBrowser'
 import { LAYER_FALLBACK_HEX } from '../landscape/splatMaterial'
 import {
@@ -8,7 +9,7 @@ import {
   listSpecies,
   type PlantGroup,
 } from '../landscape/species'
-import { GrassFields, GrassTypeList, PlantShapeFields } from './LandscapeSettings'
+import { GrassFields, GrassTypeList, PlantShapeFields, SitePlotFields } from './LandscapeSettings'
 import { grassLayers } from '../landscape/grassLayers'
 import {
   childrenOf,
@@ -55,6 +56,7 @@ export function LandscapeWorkbench() {
   const layer = useBuildingStore((s) => s.groundPaintLayer)
   const setLayer = useBuildingStore((s) => s.setGroundPaintLayer)
   const setLayerMat = useBuildingStore((s) => s.setGroundPaintLayerMaterial)
+  const pushHistory = useBuildingStore((s) => s.pushHistory)
   const paint = useBuildingStore(
     (s) => s.building.floors.find((f) => f.kind === 'ground')?.landscapePaint,
   )
@@ -120,6 +122,10 @@ export function LandscapeWorkbench() {
   return (
     <aside className="toolbar workbench-rail landscape-rail" aria-label="Ландшафт">
       <h2 className="panel-title">Ландшафт</h2>
+      <div className="site-plot-block">
+        <p className="landscape-species-label">Участок</p>
+        <SitePlotFields />
+      </div>
       <div className="tool-list">
         {tools.map((t) => (
           <button
@@ -230,6 +236,20 @@ export function LandscapeWorkbench() {
             })}
           </div>
           <p className="hint">ЛКМ — слой · Alt — стереть в базу</p>
+          {paint?.layers[layer] && (
+            <>
+              <p className="tool-group-title">PBR</p>
+              <MaterialPbrFields
+                hideDisplacement
+                ariaLabel="PBR грунта"
+                value={paint.layers[layer]}
+                onCommit={() => pushHistory()}
+                onChange={(material) =>
+                  setLayerMat(layer, material, { history: false })
+                }
+              />
+            </>
+          )}
           <TextureSourceTabs
             selected={paint?.layers[layer]}
             onSelect={(ref) => setLayerMat(layer, ref)}
@@ -303,6 +323,7 @@ export function LandscapeWorkbench() {
                       key={sp.key}
                       type="button"
                       className={`tex-card ${pendingPlant === sp.key ? 'tex-card-active' : ''}`}
+                      title={sp.name}
                       onClick={() => setPendingPlant(sp.key, plantScale)}
                     >
                       <span

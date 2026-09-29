@@ -5,9 +5,10 @@ import { wallFaceEndpoints, wallAxes } from './wallSolid'
 import { openingsForWall, openingSpan } from './openings'
 import { tessellateByMaxEdge } from './tessellate'
 
-export const WALL_FINISH_OUTSET = 0.025
-/** @deprecated use WALL_FINISH_OUTSET */
-const FACE_OUTSET = WALL_FINISH_OUTSET
+/** Finish sits on the wall solid; keep 0 so snap/tiles match the extrusion. */
+export const WALL_FINISH_OUTSET = 0
+/** Tiny pick bias so tile/paint hit planes win over the solid. */
+const FACE_PICK_OUTSET = 0.003
 /** Wall paint hit starts above the slab so floor pick owns near-wall clicks. */
 const WALL_PAINT_Y0 = 0.22
 
@@ -159,7 +160,7 @@ export function wallFaceFrame(
   floor: Floor,
   wall: Wall,
   side: WallSide,
-  outset = FACE_OUTSET,
+  outset = WALL_FINISH_OUTSET,
 ): WallFaceFrame | null {
   const ends = wallFaceEndpoints(floor, wall, side)
   const axes = wallAxes(floor, wall)
@@ -212,7 +213,7 @@ export function buildWallPaintHitGeometry(
   side: WallSide,
 ): THREE.BufferGeometry | null {
   // Extra outset so the hit plane sits clearly outside the solid extrusion
-  const frame = wallFaceFrame(floor, wall, side, FACE_OUTSET + 0.03)
+  const frame = wallFaceFrame(floor, wall, side, FACE_PICK_OUTSET)
   if (!frame) return null
   const { ax, az, ux, uz, wnx, wnz, len, height, elevation } = frame
 
@@ -255,7 +256,7 @@ export function wallFaceHitInOpening(
   side: WallSide,
   worldPoint: { x: number; y: number; z: number },
 ): boolean {
-  const frame = wallFaceFrame(floor, wall, side, FACE_OUTSET + 0.03)
+  const frame = wallFaceFrame(floor, wall, side, FACE_PICK_OUTSET)
   if (!frame) return false
   const { ax, az, ux, uz, len, s0, elevation } = frame
   const dx = worldPoint.x - ax

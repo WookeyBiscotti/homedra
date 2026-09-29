@@ -5,6 +5,120 @@ import { DEFAULT_DISPLACEMENT_SCALE } from '../materials/ambientcg'
 import type { PbrSample } from '../models/objectAppearance'
 import { MaterialSlot } from './TextureBrowser'
 
+function patchMaterialLook(
+  value: MaterialRef,
+  key: keyof MaterialRef,
+  next: unknown,
+): MaterialRef {
+  const out: MaterialRef = { ...value }
+  if (next === undefined) {
+    delete out[key]
+  } else {
+    ;(out as Record<string, unknown>)[key] = next
+  }
+  return out
+}
+
+/** Ceramic / surface PBR sliders stored on `MaterialRef`. */
+export function MaterialPbrFields({
+  value,
+  onChange,
+  onCommit,
+  hideDisplacement = false,
+  ariaLabel = 'PBR плитки',
+}: {
+  value: MaterialRef
+  onChange: (next: MaterialRef) => void
+  onCommit?: () => void
+  hideDisplacement?: boolean
+  ariaLabel?: string
+}) {
+  return (
+    <div
+      className="pbr-editor"
+      onPointerDown={onCommit}
+      role="group"
+      aria-label={ariaLabel}
+    >
+      <ColorRow
+        label="Цвет"
+        value={value.tint}
+        fallback="#ffffff"
+        onChange={(hex) => onChange({ ...value, tint: hex })}
+        onClear={() => onChange(patchMaterialLook(value, 'tint', undefined))}
+      />
+      <NumRow
+        label="Шероховатость"
+        value={value.roughness}
+        fallback={0.75}
+        onChange={(n) => onChange({ ...value, roughness: clamp01(n) })}
+        onClear={() => onChange(patchMaterialLook(value, 'roughness', undefined))}
+      />
+      <NumRow
+        label="Металличность"
+        value={value.metalness}
+        fallback={0}
+        onChange={(n) => onChange({ ...value, metalness: clamp01(n) })}
+        onClear={() => onChange(patchMaterialLook(value, 'metalness', undefined))}
+      />
+      <NumRow
+        label="Нормали"
+        value={value.normalScale}
+        fallback={0.85}
+        min={0}
+        max={2}
+        step={0.05}
+        onChange={(n) => onChange({ ...value, normalScale: Math.max(0, n) })}
+        onClear={() =>
+          onChange(patchMaterialLook(value, 'normalScale', undefined))
+        }
+      />
+      <NumRow
+        label="AO"
+        value={value.aoMapIntensity}
+        fallback={1}
+        min={0}
+        max={2}
+        step={0.05}
+        onChange={(n) => onChange({ ...value, aoMapIntensity: Math.max(0, n) })}
+        onClear={() =>
+          onChange(patchMaterialLook(value, 'aoMapIntensity', undefined))
+        }
+      />
+      <NumRow
+        label="Окружение (env)"
+        value={value.envMapIntensity}
+        fallback={0.75}
+        min={0}
+        max={3}
+        step={0.05}
+        onChange={(n) =>
+          onChange({ ...value, envMapIntensity: Math.max(0, n) })
+        }
+        onClear={() =>
+          onChange(patchMaterialLook(value, 'envMapIntensity', undefined))
+        }
+      />
+      {!hideDisplacement && (
+        <NumRow
+          label="Рельеф (м)"
+          value={value.displacementScale}
+          fallback={0}
+          min={0}
+          max={0.08}
+          step={0.001}
+          onChange={(n) =>
+            onChange({ ...value, displacementScale: Math.max(0, n) })
+          }
+          onClear={() =>
+            onChange(patchMaterialLook(value, 'displacementScale', undefined))
+          }
+        />
+      )}
+    </div>
+  )
+}
+
 export type { PbrSample }
 
 function clamp01(n: number): number {

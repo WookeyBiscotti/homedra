@@ -38,10 +38,14 @@ export function TextureRegionPicker({
   material,
   value,
   onChange,
+  onCommit,
+  hint = 'Рамка на текстуре — какой кусок попадёт на поверхность. Тяните середину или углы.',
 }: {
   material: MaterialRef
   value?: TileTexRegion
   onChange: (region: TileTexRegion) => void
+  onCommit?: () => void
+  hint?: string
 }) {
   const loaded = useMaterialThumb(material)
   const thumb = loaded ?? materialThumbnailUrl(material)
@@ -95,14 +99,15 @@ export function TextureRegionPicker({
         <button
           type="button"
           className="ghost small"
-          onClick={() => onChange(defaultTileTexRegion())}
+          onClick={() => {
+            onCommit?.()
+            onChange(defaultTileTexRegion())
+          }}
         >
           Вся текстура
         </button>
       </div>
-      <p className="hint">
-        Рамка на текстуре — какой кусок попадёт на плитку. Тяните середину или углы.
-      </p>
+      <p className="hint">{hint}</p>
       <div
         ref={boxRef}
         className="tile-tex-picker-box"
@@ -127,6 +132,7 @@ export function TextureRegionPicker({
             if (!boxRef.current) return
             e.preventDefault()
             e.stopPropagation()
+            onCommit?.()
             try {
               boxRef.current.setPointerCapture(e.pointerId)
             } catch {
@@ -152,6 +158,7 @@ export function TextureRegionPicker({
             onPointerDown={(e) => {
               e.preventDefault()
               e.stopPropagation()
+              onCommit?.()
               try {
                 boxRef.current?.setPointerCapture(e.pointerId)
               } catch {
