@@ -6,10 +6,11 @@ import {
   floorPaintRegions,
   hitFloorPaintRegion,
 } from '../../engine/geometry/floorPaint'
-import { resolveFloorRegionMaterial } from '../../engine/geometry/floorPlates'
+import { resolveFloorRegionMaterial, resolveCeilingRegionMaterial } from '../../engine/geometry/floorPlates'
 import { floorOpeningIdFromKey } from '../../engine/geometry/openings'
 import { floorSlabOpeningHoles } from '../../engine/geometry/slabOpenings'
 import {
+  buildRoomCeilingGeometry,
   buildRoomFloorGeometry,
   wallFaceHitInOpening,
 } from '../../engine/geometry/wallFaces'
@@ -26,12 +27,13 @@ import { PaintVolumeBox, PaintVolumeCutout } from './VolumeBoxes'
 
 const HOVER = '#c45c26'
 const WALL_HIT_FLOOR_CLEARANCE = 0.22
+const WALL_HIT_CEILING_CLEARANCE = 0.22
 
 /** No-op raycast — structural meshes ignore pointers in paint mode. */
 export function disableRaycast() {}
 
 /**
- * Raycast a wall face; drop opening hits and hits near the floor plane.
+ * Raycast a wall face; drop opening hits and hits near floor / ceiling planes.
  */
 export function makeWallPaintRaycast(floor: Floor, wall: Wall, side: WallSide) {
   return function wallPaintRaycast(
@@ -41,9 +43,14 @@ export function makeWallPaintRaycast(floor: Floor, wall: Wall, side: WallSide) {
   ) {
     const before = intersects.length
     THREE.Mesh.prototype.raycast.call(this, raycaster, intersects)
+    const ceilY = floor.elevation + floor.height
     for (let i = intersects.length - 1; i >= before; i--) {
       const hit = intersects[i]
       if (hit.point.y < floor.elevation + WALL_HIT_FLOOR_CLEARANCE) {
+        intersects.splice(i, 1)
+        continue
+      }
+      if (hit.point.y > ceilY - WALL_HIT_CEILING_CLEARANCE) {
         intersects.splice(i, 1)
         continue
       }
@@ -134,6 +141,61 @@ function PaintFloorRegion({
   )
 }
 
+function PaintCeilingRegion({
+  floorId,
+  regionKey,
+  geometry,
+  hasFinish,
+}: {
+  floorId: string
+  regionKey: string
+  geometry: THREE.BufferGeometry
+  hasFinish: boolean
+}) {
+  const setRoomCeilingMaterial = useBuildingStore((s) => s.setRoomCeilingMaterial)
+  const setSelection = useBuildingStore((s) => s.setSelection)
+  const setActiveFloor = useBuildingStore((s) => s.setActiveFloor)
+  const [hovered, setHovered] = useState(false)
+
+  return (
+    <mesh
+      geometry={geometry}
+      onClick={(e: ThreeEvent<MouseEvent>) => {
+        e.stopPropagation()
+        setActiveFloor(floorId)
+        setSelection({ kind: 'room', key: regionKey })
+        const brush = useBuildingStore.getState().paintBrush
+        if (!brush && !e.altKey) return
+        setRoomCeilingMaterial(regionKey, e.altKey ? null : brush)
+      }}
+      onPointerOver={(e) => {
+        e.stopPropagation()
+        setHovered(true)
+        const brush = useBuildingStore.getState().paintBrush
+        document.body.style.cursor = brush || e.altKey ? 'crosshair' : 'pointer'
+      }}
+      onPointerOut={() => {
+        setHovered(false)
+        document.body.style.cursor = 'default'
+      }}
+      userData={{ roomKey: regionKey, paintTarget: true, paintKind: 'ceiling' }}
+      renderOrder={20}
+    >
+      <meshBasicMaterial
+        transparent
+        opacity={hasFinish ? (hovered ? 0.18 : 0.04) : hovered ? 0.28 : 0.1}
+        color={hovered ? HOVER : '#e8dfd0'}
+        depthWrite={false}
+        side={THREE.FrontSide}
+        polygonOffset
+        polygonOffsetFactor={-6}
+        polygonOffsetUnits={-6}
+      />
+      {hovered && <Edges threshold={15} color={HOVER} scale={1.001} />}
+    </mesh>
+  )
+}
+
 function PaintSlabCut({
   floorId,
   opening,
@@ -209,7 +271,7 @@ function PaintSlabCut({
 }
 
 /**
- * Paint hit targets for floors, slab wells and volume boxes.
+ * Paint hit targets for floors, ceilings, slab wells and volume boxes.
  * Wall sides / cuts are painted on the wall solid itself.
  */
 export function PaintPickables({ floorId }: { floorId: string }) {
@@ -254,11 +316,39 @@ export function PaintPickables({ floorId }: { floorId: string }) {
     return out
   }, [floor])
 
+  const ceilingRegions = useMemo(() => {
+    if (!floor || !isStoryFloor(floor)) return []
+    const regions = floorPaintRegions(floor)
+    const holes = floorSlabOpeningHoles(floor)
+    const out: Array<{
+      key: string
+      geo: THREE.BufferGeometry
+      hasFinish: boolean
+    }> = []
+    for (const r of regions) {
+      if (!r.room) continue
+      const geo = buildRoomCeilingGeometry(
+        r.polygon,
+        floor.elevation,
+        floor.height,
+        { inflateM: 0.12, holes },
+      )
+      if (!geo) continue
+      out.push({
+        key: r.key,
+        geo,
+        hasFinish: !!resolveCeilingRegionMaterial(floor, r.key),
+      })
+    }
+    return out
+  }, [floor])
+
   useEffect(() => {
     return () => {
       for (const item of floorRegions) item.geo.dispose()
+      for (const item of ceilingRegions) item.geo.dispose()
     }
-  }, [floorRegions])
+  }, [floorRegions, ceilingRegions])
 
   if (!floor) return null
 
@@ -267,6 +357,15 @@ export function PaintPickables({ floorId }: { floorId: string }) {
       {floorRegions.map((item) => (
         <PaintFloorRegion
           key={item.key}
+          floorId={floorId}
+          regionKey={item.key}
+          geometry={item.geo}
+          hasFinish={item.hasFinish}
+        />
+      ))}
+      {ceilingRegions.map((item) => (
+        <PaintCeilingRegion
+          key={`ceil-${item.key}`}
           floorId={floorId}
           regionKey={item.key}
           geometry={item.geo}

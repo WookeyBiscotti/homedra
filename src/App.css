@@ -1852,7 +1852,8 @@ button.linkish {
   flex: 0 0 auto;
 }
 
-.custom-tex-pick img {
+.custom-tex-pick img,
+.custom-tex-thumb img {
   width: 100%;
   height: auto;
   aspect-ratio: 1;
@@ -1860,6 +1861,45 @@ button.linkish {
   object-fit: cover;
   border-radius: 3px;
   background: var(--bg-deep);
+}
+
+.custom-tex-thumb {
+  position: relative;
+  display: block;
+  width: 100%;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.custom-tex-tint {
+  position: absolute;
+  inset: 0;
+  border-radius: 3px;
+  mix-blend-mode: multiply;
+  pointer-events: none;
+}
+
+.custom-tex-actions {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.custom-tex-actions .ghost.small {
+  min-width: 1.4rem;
+  background: rgba(255, 255, 255, 0.88);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.15rem;
+}
+
+.custom-tex-actions .ui-icon {
+  width: 14px;
+  height: 14px;
 }
 
 .custom-tex-del {
@@ -1872,6 +1912,68 @@ button.linkish {
 
 .tex-card-save.in-collection {
   color: var(--accent);
+}
+
+.tex-collection-edit-modal {
+  width: min(640px, 96vw);
+  height: auto;
+  max-height: min(90vh, 720px);
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+.tex-collection-edit-backdrop {
+  z-index: 110;
+}
+
+.tex-collection-edit-body {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.85fr) minmax(220px, 1.15fr);
+  gap: 0.85rem;
+  padding: 0.75rem 1rem 1rem;
+  min-height: 0;
+  overflow: auto;
+}
+
+.tex-collection-edit-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.tex-collection-edit-preview .custom-tex-thumb {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.tex-collection-edit-preview .custom-tex-thumb img {
+  aspect-ratio: 1;
+  border-radius: 8px;
+}
+
+.tex-collection-edit-preview .custom-tex-tint {
+  border-radius: 8px;
+}
+
+.tex-collection-edit-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.tex-collection-edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+@media (max-width: 560px) {
+  .tex-collection-edit-body {
+    grid-template-columns: 1fr;
+  }
 }
 
 .tex-collection .collection-breadcrumb,

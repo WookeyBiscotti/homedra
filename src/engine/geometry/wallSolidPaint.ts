@@ -11,7 +11,7 @@ import {
 } from './openings'
 import { wallAxes, wallFaceEndpoints } from './wallSolid'
 import { wallFaceFrame } from './wallFaces'
-import { wallFreeEndPlanEdge } from './wallCuts'
+import { wallFreeEndPlanEdge, appendOpeningHorizontalCutQuads } from './wallCuts'
 
 export type WallSolidSlot = 'pos' | 'neg' | 'cut' | 'body'
 
@@ -107,19 +107,20 @@ export function buildWallSolidFaceCatalog(floor: Floor): FaceSeg[] {
         x: ends.a.x + axes.ux * s + axes.nx * n,
         y: ends.a.y + axes.uy * s + axes.ny * n,
       })
+      // Jambs face into the opening (same as pushOpeningReveals).
       segs.push({
         wallId: wall.id,
         slot: 'cut',
         a: along(span.start, -halfT),
         b: along(span.start, halfT),
-        outward: { x: -axes.ux, y: -axes.uy },
+        outward: { x: axes.ux, y: axes.uy },
       })
       segs.push({
         wallId: wall.id,
         slot: 'cut',
         a: along(span.end, -halfT),
         b: along(span.end, halfT),
-        outward: { x: axes.ux, y: axes.uy },
+        outward: { x: -axes.ux, y: -axes.uy },
       })
     }
   }
@@ -503,6 +504,29 @@ export function buildWallSolidPaintParts(
     geo.dispose()
   }
 
+  // Extrusion caps triangulate across whole wall spans, so opening heads/sills
+  // rarely classify. Inject explicit horizontal reveal quads into cut buckets.
+  for (const wall of floor.walls) {
+    for (const opening of openingsForWall(floor, wall.id)) {
+      const positions: number[] = []
+      const normals: number[] = []
+      const uvs: number[] = []
+      const indices: number[] = []
+      appendOpeningHorizontalCutQuads(
+        floor,
+        wall,
+        opening,
+        positions,
+        normals,
+        uvs,
+        indices,
+      )
+      if (positions.length === 0) continue
+      const bucket = ensure(wall.id, 'cut')
+      appendIndexedMeshToBucket(bucket, positions, normals, uvs, indices)
+    }
+  }
+
   const parts: WallSolidPart[] = []
   for (const bucket of buckets.values()) {
     if (bucket.positions.length === 0) continue
@@ -514,6 +538,35 @@ export function buildWallSolidPaintParts(
     })
   }
   return parts
+}
+
+function appendIndexedMeshToBucket(
+  bucket: Bucket,
+  positions: number[],
+  normals: number[],
+  uvs: number[],
+  indices: number[],
+) {
+  for (let i = 0; i < indices.length; i += 3) {
+    const ia = indices[i]
+    const ib = indices[i + 1]
+    const ic = indices[i + 2]
+    const base = bucket.positions.length / 3
+    for (const ii of [ia, ib, ic]) {
+      bucket.positions.push(
+        positions[ii * 3],
+        positions[ii * 3 + 1],
+        positions[ii * 3 + 2],
+      )
+      bucket.normals.push(
+        normals[ii * 3],
+        normals[ii * 3 + 1],
+        normals[ii * 3 + 2],
+      )
+      bucket.uvs.push(uvs[ii * 2], uvs[ii * 2 + 1])
+    }
+    bucket.indices.push(base, base + 1, base + 2)
+  }
 }
 
 export function wallSolidPartMaterial(

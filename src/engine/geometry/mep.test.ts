@@ -258,6 +258,7 @@ describe('mep', () => {
       boxes: false,
       pipes: true,
       cables: false,
+      tiles: false,
     })
     expect(copied.pipes?.nodes).toHaveLength(2)
     expect(copied.pipes?.segments).toHaveLength(1)

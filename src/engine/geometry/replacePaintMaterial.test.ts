@@ -37,6 +37,7 @@ function floorWithWall(mat: MaterialRef): Floor {
       },
     ],
     roomFloorMaterials: { room_1: { ...mat } },
+    roomCeilingMaterials: { room_1: { ...mat } },
     plates: [
       {
         id: createId('p'),
@@ -71,6 +72,7 @@ describe('replacePaintMaterialOnFloor', () => {
     expect(next.walls[0]?.materials?.pos).toEqual(to)
     expect(next.walls[0]?.materials?.neg).toEqual(wood({ tint: '#ff0000' }))
     expect(next.roomFloorMaterials?.room_1).toEqual(to)
+    expect(next.roomCeilingMaterials?.room_1).toEqual(to)
     expect(next.plates?.[0]?.material).toEqual(to)
   })
 

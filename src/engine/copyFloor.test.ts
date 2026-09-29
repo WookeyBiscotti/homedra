@@ -106,6 +106,7 @@ describe('applyFloorCopy', () => {
       boxes: false,
       pipes: false,
       cables: false,
+      tiles: false,
     })
 
     expect(result.constraints).toHaveLength(0)
@@ -127,6 +128,7 @@ describe('applyFloorCopy', () => {
       boxes: false,
       pipes: false,
       cables: false,
+      tiles: false,
     })
 
     expect(result.walls).toHaveLength(2)
@@ -163,6 +165,7 @@ describe('applyFloorCopy', () => {
       boxes: true,
       pipes: false,
       cables: false,
+      tiles: false,
     })
     expect(result.boxes).toHaveLength(1)
     expect(result.boxCutouts).toHaveLength(1)
@@ -236,8 +239,9 @@ describe('applyFloorCopy', () => {
     expect(boxTile?.id).not.toBe('tile-box')
     expect(wallTile?.surface.type).toBe('wall')
     if (wallTile?.surface.type === 'wall') {
-      expect(wallTile.surface.wallId).not.toBe(wallId)
-      expect(result.walls.some((w) => w.id === wallTile.surface.wallId)).toBe(true)
+      const remappedWallId = wallTile.surface.wallId
+      expect(remappedWallId).not.toBe(wallId)
+      expect(result.walls.some((w) => w.id === remappedWallId)).toBe(true)
     }
     expect(boxTile?.surface.type).toBe('box')
     if (boxTile?.surface.type === 'box') {

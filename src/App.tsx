@@ -321,13 +321,8 @@ export default function App() {
       if (!mod) {
         const tool = keyToTool[key]
         if (!tool) return
-        // placeObject always routes to furnish workbench via setTool
-        if (tool === 'placeObject') {
-          setTool(tool)
-          return
-        }
-        const allowed = toolsForWorkbench(workbench)
-        if (allowed.includes(tool) || toolsForWorkbench('draft').includes(tool)) {
+        // Only tools belonging to the active workbench — never cross-switch
+        if (toolsForWorkbench(workbench).includes(tool)) {
           setTool(tool)
         }
       }

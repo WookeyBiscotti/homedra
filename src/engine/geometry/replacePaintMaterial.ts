@@ -100,6 +100,21 @@ export function replacePaintMaterialOnFloor(
     }
   }
 
+  let roomCeilingMaterials = floor.roomCeilingMaterials
+  if (roomCeilingMaterials) {
+    let mapChanged = false
+    const map: Record<string, MaterialRef> = {}
+    for (const [key, mat] of Object.entries(roomCeilingMaterials)) {
+      const next = swap(mat, from, to)
+      if (next && next !== mat) mapChanged = true
+      if (next) map[key] = next
+    }
+    if (mapChanged) {
+      roomCeilingMaterials = Object.keys(map).length > 0 ? map : undefined
+      changed = true
+    }
+  }
+
   const plates = floor.plates?.map((p) => {
     const material = swap(p.material, from, to)
     if (material === p.material) return p
@@ -133,6 +148,7 @@ export function replacePaintMaterialOnFloor(
     ...floor,
     walls,
     roomFloorMaterials,
+    roomCeilingMaterials,
     plates,
     boxes,
     boxCutouts,

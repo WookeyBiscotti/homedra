@@ -115,3 +115,12 @@ export function resolveFloorRegionMaterial(
   }
   return floor.roomFloorMaterials?.[key]
 }
+
+/** Resolve ceiling finish for a room paint region key (rooms only). */
+export function resolveCeilingRegionMaterial(
+  floor: Floor,
+  key: string,
+): MaterialRef | undefined {
+  if (floorPlateIdFromKey(key) || key.startsWith('opening:')) return undefined
+  return floor.roomCeilingMaterials?.[key]
+}

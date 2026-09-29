@@ -337,6 +337,9 @@ function pushFaceQuad(args: {
 /** Must sit above the slab top bias (+0.01) so finishes aren't buried under depthWrite. */
 export const FLOOR_FINISH_Y_OFFSET = 0.015
 
+/** Sit just below the next slab / room top so the finish faces the room. */
+export const CEILING_FINISH_Y_OFFSET = 0.015
+
 /** Flat floor polygon for a room (walking surface). UV = world XZ in meters. */
 export function buildRoomFloorGeometry(
   polygon: Array<{ x: number; y: number }>,
@@ -348,8 +351,44 @@ export function buildRoomFloorGeometry(
     holes?: Array<Array<{ x: number; y: number }>>
   },
 ): THREE.BufferGeometry | null {
+  return buildRoomHorizontalGeometry(polygon, elevation, {
+    ...opts,
+    yOffset: opts?.yOffset ?? FLOOR_FINISH_Y_OFFSET,
+    faceDown: false,
+  })
+}
+
+/** Room ceiling finish at elevation + height. Normals face down into the room. */
+export function buildRoomCeilingGeometry(
+  polygon: Array<{ x: number; y: number }>,
+  elevation: number,
+  height: number,
+  opts?: {
+    yOffset?: number
+    inflateM?: number
+    holes?: Array<Array<{ x: number; y: number }>>
+  },
+): THREE.BufferGeometry | null {
+  const yOffset = opts?.yOffset ?? CEILING_FINISH_Y_OFFSET
+  return buildRoomHorizontalGeometry(polygon, elevation + height, {
+    ...opts,
+    yOffset: -yOffset,
+    faceDown: true,
+  })
+}
+
+function buildRoomHorizontalGeometry(
+  polygon: Array<{ x: number; y: number }>,
+  elevation: number,
+  opts?: {
+    yOffset?: number
+    inflateM?: number
+    holes?: Array<Array<{ x: number; y: number }>>
+    faceDown?: boolean
+  },
+): THREE.BufferGeometry | null {
   if (polygon.length < 3) return null
-  const yOffset = opts?.yOffset ?? FLOOR_FINISH_Y_OFFSET
+  const yOffset = opts?.yOffset ?? 0
   const inflated =
     opts?.inflateM && opts.inflateM > 0
       ? inflatePolygonOutward(polygon, opts.inflateM)
@@ -409,7 +448,32 @@ export function buildRoomFloorGeometry(
   }
   geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2))
   geo.computeVertexNormals()
+
+  if (opts?.faceDown) {
+    flipGeometryFaces(geo)
+  }
+
   return finalizePbrGeometry(geo)
+}
+
+function flipGeometryFaces(geo: THREE.BufferGeometry) {
+  const idx = geo.index
+  if (idx) {
+    for (let i = 0; i < idx.count; i += 3) {
+      const b = idx.getX(i + 1)
+      const c = idx.getX(i + 2)
+      idx.setX(i + 1, c)
+      idx.setX(i + 2, b)
+    }
+    idx.needsUpdate = true
+  }
+  const nrm = geo.attributes.normal
+  if (nrm) {
+    for (let i = 0; i < nrm.count; i++) {
+      nrm.setXYZ(i, -nrm.getX(i), -nrm.getY(i), -nrm.getZ(i))
+    }
+    nrm.needsUpdate = true
+  }
 }
 
 function pointInRingXY(

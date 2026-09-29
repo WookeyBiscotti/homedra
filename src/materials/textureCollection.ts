@@ -274,6 +274,33 @@ export async function deleteTextureItem(id: string): Promise<void> {
   notifyTextureCollection()
 }
 
+/** Display name for a duplicated collection material. */
+export function copyTextureItemName(name: string): string {
+  const trimmed = name.trim() || 'Текстура'
+  return `${trimmed} (копия)`
+}
+
+/**
+ * Clone a collection item (same maps / folder, new id).
+ * Skips catalog dedupe so tinted variants can coexist.
+ */
+export async function duplicateTextureItem(
+  id: string,
+): Promise<TextureCollectionItem | undefined> {
+  const src = await getTextureItem(id)
+  if (!src) return undefined
+  const item: TextureCollectionItem = {
+    id: createTextureItemId(),
+    folderId: src.folderId,
+    name: copyTextureItemName(src.name),
+    material: { ...src.material },
+    thumbBlob: src.thumbBlob,
+    createdAt: Date.now(),
+  }
+  await putTextureItem(item)
+  return item
+}
+
 async function fetchThumbBlob(url: string): Promise<Blob | undefined> {
   const candidates = [url]
   const proxied = proxiedTextureUrl(url)

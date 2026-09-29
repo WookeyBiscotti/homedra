@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { MaterialRef } from '../engine/types'
 import type { LocalTextureRecord } from './customTextures'
 import {
+  copyTextureItemName,
   countTextureLibrary,
   findDuplicateTextureItem,
   itemFromLocalTexture,
@@ -72,5 +73,10 @@ describe('texture collection helpers', () => {
     ).toBe(3)
     expect(countTextureLibrary([], [{ id: 'tex_loose' }])).toBe(1)
     expect(countTextureLibrary([item({ material: oak })], [])).toBe(1)
+  })
+
+  it('names duplicated materials with a (копия) suffix', () => {
+    expect(copyTextureItemName('Белый кирпич')).toBe('Белый кирпич (копия)')
+    expect(copyTextureItemName('  ')).toBe('Текстура (копия)')
   })
 })

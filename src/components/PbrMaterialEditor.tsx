@@ -5,16 +5,16 @@ import { DEFAULT_DISPLACEMENT_SCALE } from '../materials/ambientcg'
 import type { PbrSample } from '../models/objectAppearance'
 import { MaterialSlot } from './TextureBrowser'
 
-function patchMaterialLook(
+function patchMaterialLook<K extends keyof MaterialRef>(
   value: MaterialRef,
-  key: keyof MaterialRef,
-  next: unknown,
+  key: K,
+  next: MaterialRef[K] | undefined,
 ): MaterialRef {
   const out: MaterialRef = { ...value }
   if (next === undefined) {
     delete out[key]
   } else {
-    ;(out as Record<string, unknown>)[key] = next
+    out[key] = next
   }
   return out
 }
@@ -210,16 +210,16 @@ function ColorRow({
   )
 }
 
-function patch(
+function patch<K extends keyof ObjectMaterialOverride>(
   value: ObjectMaterialOverride,
-  key: keyof ObjectMaterialOverride,
-  next: unknown,
+  key: K,
+  next: ObjectMaterialOverride[K] | undefined,
 ): ObjectMaterialOverride {
   const out: ObjectMaterialOverride = { ...value }
   if (next === undefined) {
     delete out[key]
   } else {
-    ;(out as Record<string, unknown>)[key] = next
+    out[key] = next
   }
   return out
 }

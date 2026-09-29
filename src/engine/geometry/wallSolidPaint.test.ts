@@ -225,6 +225,63 @@ describe('buildWallSolidPaintParts', () => {
     for (const p of parts) p.geometry.dispose()
   })
 
+  it('puts closed-room door jambs on cut, not body', () => {
+    // No free ends — cut area must come from the opening reveals.
+    const floor = rectFloor()
+    floor.openings = [
+      {
+        id: 'door1',
+        wallId: 'w1',
+        kind: 'door',
+        offset: 3,
+        width: 0.9,
+        height: 2.1,
+        sillHeight: 0,
+      },
+    ]
+    const parts = buildWallSolidPaintParts(floor, extrudeFloorWalls(floor).layers)
+    const cut = parts.find((p) => p.wallId === 'w1' && p.slot === 'cut')
+    expect(cut).toBeTruthy()
+    // 2 jambs × 0.2 × 2.1 ≈ 0.84 m² (+ head 0.9×0.2)
+    expect(partArea(cut!.geometry)).toBeGreaterThan(0.9)
+
+    // Downward-facing head tris should be present on cut
+    const nrm = cut!.geometry.attributes.normal
+    const pos = cut!.geometry.attributes.position
+    let headArea = 0
+    const idx = cut!.geometry.index
+    const triCount = idx ? idx.count / 3 : pos.count / 3
+    for (let t = 0; t < triCount; t++) {
+      const i0 = idx ? idx.getX(t * 3) : t * 3
+      const i1 = idx ? idx.getX(t * 3 + 1) : t * 3 + 1
+      const i2 = idx ? idx.getX(t * 3 + 2) : t * 3 + 2
+      const ny = (nrm.getY(i0) + nrm.getY(i1) + nrm.getY(i2)) / 3
+      if (ny > -0.7) continue
+      const ax = pos.getX(i0)
+      const ay = pos.getY(i0)
+      const az = pos.getZ(i0)
+      const bx = pos.getX(i1)
+      const by = pos.getY(i1)
+      const bz = pos.getZ(i1)
+      const cx = pos.getX(i2)
+      const cy = pos.getY(i2)
+      const cz = pos.getZ(i2)
+      const e1x = bx - ax
+      const e1y = by - ay
+      const e1z = bz - az
+      const e2x = cx - ax
+      const e2y = cy - ay
+      const e2z = cz - az
+      const nx = e1y * e2z - e1z * e2y
+      const ny2 = e1z * e2x - e1x * e2z
+      const nz = e1x * e2y - e1y * e2x
+      headArea += 0.5 * Math.hypot(nx, ny2, nz)
+    }
+    // Door head ≈ 0.9 × 0.2 = 0.18
+    expect(headArea).toBeGreaterThan(0.15)
+    for (const p of parts) p.geometry.dispose()
+  })
+
   it('writes meter UVs along a wall face', () => {
     const floor = rectFloor()
     const parts = buildWallSolidPaintParts(floor, extrudeFloorWalls(floor).layers)

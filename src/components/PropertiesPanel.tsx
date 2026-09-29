@@ -50,6 +50,7 @@ export function PropertiesPanel() {
   const setWallCutMaterial = useBuildingStore((s) => s.setWallCutMaterial)
   const setWallBothMaterials = useBuildingStore((s) => s.setWallBothMaterials)
   const setRoomFloorMaterial = useBuildingStore((s) => s.setRoomFloorMaterial)
+  const setRoomCeilingMaterial = useBuildingStore((s) => s.setRoomCeilingMaterial)
   const setRoomWallsMaterial = useBuildingStore((s) => s.setRoomWallsMaterial)
   const setFixedLengthValue = useBuildingStore((s) => s.setFixedLengthValue)
   const setWallDistance = useBuildingStore((s) => s.setWallDistance)
@@ -1799,6 +1800,13 @@ export function PropertiesPanel() {
             value={floor.roomFloorMaterials?.[room.key]}
             onChange={(ref) => setRoomFloorMaterial(room.key, ref)}
             onClear={() => setRoomFloorMaterial(room.key, null)}
+            onCommit={() => pushHistory()}
+          />
+          <CoveringSlot
+            label="Потолок"
+            value={floor.roomCeilingMaterials?.[room.key]}
+            onChange={(ref) => setRoomCeilingMaterial(room.key, ref)}
+            onClear={() => setRoomCeilingMaterial(room.key, null)}
             onCommit={() => pushHistory()}
           />
           <CoveringSlot

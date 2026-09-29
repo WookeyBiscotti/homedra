@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { materialRefsEqual } from '../engine/geometry/replacePaintMaterial'
 import type { MaterialRef } from '../engine/types'
 import {
   IMAGE_ACCEPT,
@@ -13,10 +15,12 @@ import {
   createTextureFolderId,
   deleteTextureFolder,
   deleteTextureItem,
+  duplicateTextureItem,
   listTextureFolders,
   listTextureItems,
   migrateLocalTexturesToCollection,
   putTextureFolder,
+  putTextureItem,
   subscribeTextureCollection,
   type TextureCollectionFolder,
   type TextureCollectionItem,
@@ -36,6 +40,8 @@ import {
   subscribeLibraryTokens,
 } from '../models/tokens'
 import { useBuildingStore } from '../store/buildingStore'
+import { IconImg, UI_ICONS } from './icons'
+import { MaterialPbrFields } from './PbrMaterialEditor'
 
 function useTextureCollection(): {
   folders: TextureCollectionFolder[]
@@ -115,6 +121,143 @@ function useTextureItemThumbs(
   return thumbs
 }
 
+function TextureThumb({
+  src,
+  tint,
+}: {
+  src?: string
+  tint?: string
+}) {
+  if (!src) return <span className="mat-slot-empty">img</span>
+  return (
+    <span className="custom-tex-thumb">
+      <img src={src} alt="" referrerPolicy="no-referrer" />
+      {tint && tint.toLowerCase() !== '#ffffff' && (
+        <span
+          className="custom-tex-tint"
+          style={{ background: tint }}
+          aria-hidden
+        />
+      )}
+    </span>
+  )
+}
+
+function TextureCollectionItemEditor({
+  item,
+  thumbUrl,
+  onClose,
+  onSaved,
+}: {
+  item: TextureCollectionItem
+  thumbUrl?: string
+  onClose: () => void
+  onSaved: (item: TextureCollectionItem) => void
+}) {
+  const [name, setName] = useState(item.name)
+  const [material, setMaterial] = useState<MaterialRef>(() => ({
+    ...item.material,
+  }))
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [blobThumb, setBlobThumb] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!item.thumbBlob) {
+      setBlobThumb(null)
+      return
+    }
+    const url = URL.createObjectURL(item.thumbBlob)
+    setBlobThumb(url)
+    return () => URL.revokeObjectURL(url)
+  }, [item.thumbBlob])
+
+  const save = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const next: TextureCollectionItem = {
+        ...item,
+        name: name.trim() || item.name,
+        material: { ...material, name: name.trim() || material.name },
+      }
+      await putTextureItem(next)
+      onSaved(next)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось сохранить')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return createPortal(
+    <div
+      className="tex-modal-backdrop tex-collection-edit-backdrop"
+      role="dialog"
+      aria-modal
+      aria-label="Редактирование материала"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div
+        className="tex-modal tex-collection-edit-modal"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="tex-modal-header">
+          <h3>Материал</h3>
+          <button type="button" className="ghost" onClick={onClose}>
+            Закрыть
+          </button>
+        </header>
+        <div className="tex-collection-edit-body">
+          <div className="tex-collection-edit-preview">
+            <TextureThumb
+              src={blobThumb ?? thumbUrl}
+              tint={material.tint}
+            />
+            <p className="muted">
+              Цвет умножается на albedo — белый кирпич можно сделать синим.
+            </p>
+          </div>
+          <div className="tex-collection-edit-controls">
+            <label className="collection-edit-field">
+              Название
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                disabled={busy}
+              />
+            </label>
+            <p className="tool-group-title">Цветокоррекция / PBR</p>
+            <MaterialPbrFields
+              value={material}
+              onChange={setMaterial}
+              ariaLabel="Цветокоррекция материала"
+            />
+            {error && <p className="conflict">{error}</p>}
+            <div className="tex-collection-edit-actions">
+              <button type="button" disabled={busy} onClick={() => void save()}>
+                {busy ? '…' : 'Сохранить'}
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                disabled={busy}
+                onClick={onClose}
+              >
+                Отмена
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
 function TextureFolderPick({
   title,
   folders,
@@ -186,6 +329,7 @@ function TextureCollectionPanel({
   const [urlDraft, setUrlDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [editing, setEditing] = useState<TextureCollectionItem | null>(null)
   const thumbs = useTextureItemThumbs(items)
 
   const visibleItems = useMemo(
@@ -200,7 +344,6 @@ function TextureCollectionPanel({
     () => folderPath(folders, folderId),
     [folders, folderId],
   )
-  const selectedKey = selected ? materialCacheKey(selected) : null
 
   const run = async (work: () => Promise<TextureCollectionItem>) => {
     setBusy(true)
@@ -233,6 +376,21 @@ function TextureCollectionPanel({
     })
     setNewFolderName('')
     await reload()
+  }
+
+  const onDuplicate = async (item: TextureCollectionItem) => {
+    setBusy(true)
+    setError(null)
+    try {
+      const copy = await duplicateTextureItem(item.id)
+      if (!copy) return
+      await reload()
+      setEditing(copy)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось скопировать')
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
@@ -349,8 +507,7 @@ function TextureCollectionPanel({
 
       <div className={gridClassName}>
         {visibleItems.map((item) => {
-          const active =
-            selectedKey !== null && materialCacheKey(item.material) === selectedKey
+          const active = materialRefsEqual(item.material, selected)
           return (
             <div
               key={item.id}
@@ -361,29 +518,58 @@ function TextureCollectionPanel({
                 className="custom-tex-pick"
                 onClick={() => onSelect(item.material)}
               >
-                {thumbs[item.id] ? (
-                  <img
-                    src={thumbs[item.id]}
-                    alt=""
-                    referrerPolicy="no-referrer"
-                  />
-                ) : (
-                  <span className="mat-slot-empty">img</span>
-                )}
+                <TextureThumb
+                  src={thumbs[item.id]}
+                  tint={item.material.tint}
+                />
                 <span>{item.name}</span>
               </button>
-              <button
-                type="button"
-                className="ghost small custom-tex-del"
-                title="Удалить из коллекции"
-                onClick={() => void deleteTextureItem(item.id).then(() => reload())}
-              >
-                ×
-              </button>
+              <div className="custom-tex-actions">
+                <button
+                  type="button"
+                  className="ghost small"
+                  title="Сделать копию"
+                  disabled={busy}
+                  onClick={() => void onDuplicate(item)}
+                >
+                  <IconImg src={UI_ICONS.copy} className="ui-icon" />
+                </button>
+                <button
+                  type="button"
+                  className="ghost small"
+                  title="Цвет / PBR"
+                  onClick={() => setEditing(item)}
+                >
+                  ✎
+                </button>
+                <button
+                  type="button"
+                  className="ghost small"
+                  title="Удалить из коллекции"
+                  onClick={() =>
+                    void deleteTextureItem(item.id).then(() => reload())
+                  }
+                >
+                  ×
+                </button>
+              </div>
             </div>
           )
         })}
       </div>
+
+      {editing && (
+        <TextureCollectionItemEditor
+          item={editing}
+          thumbUrl={thumbs[editing.id]}
+          onClose={() => setEditing(null)}
+          onSaved={(next) => {
+            setEditing(null)
+            onSelect(next.material)
+            void reload()
+          }}
+        />
+      )}
     </div>
   )
 }

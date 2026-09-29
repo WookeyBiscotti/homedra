@@ -50,7 +50,6 @@ import {
   estimatePlanHalf,
   type Floor,
   type FloorVisibility,
-  isElectricalTool,
   isGroundFloor,
   isLandscapeTool,
   isMepFixtureTool,
@@ -81,7 +80,6 @@ import {
   type TileSurface,
   clonePlacedObject,
   DEFAULT_TILE_GROUT_M,
-  isTilingTool,
   normalizeFloorVisibility,
   normalizeTileRotation,
   recalcFloorElevations,
@@ -682,6 +680,10 @@ interface BuildingState {
     roomKey: string,
     material: MaterialRef | null,
   ) => void
+  setRoomCeilingMaterial: (
+    roomKey: string,
+    material: MaterialRef | null,
+  ) => void
   setRoomWallsMaterial: (
     roomKey: string,
     material: MaterialRef | null,
@@ -891,8 +893,8 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
           })
           return
         }
+        if (workbench !== 'furnish') return
         set({
-          workbench: 'furnish',
           tool: 'select',
           wallDraftFrom: null,
           mepDraftFrom: null,
@@ -909,32 +911,8 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         })
         return
       }
-      if (isPlumbingTool(tool) && workbench !== 'plumbing') {
-        get().setWorkbench('plumbing')
-        get().setTool(tool)
-        return
-      }
-      if (isElectricalTool(tool) && workbench !== 'electrical') {
-        get().setWorkbench('electrical')
-        get().setTool(tool)
-        return
-      }
-      if (isTilingTool(tool) && workbench !== 'tiling') {
-        get().setWorkbench('tiling')
-        get().setTool(tool)
-        return
-      }
-      const allowed = toolsForWorkbench(workbench)
-      if (!allowed.includes(tool) && workbench !== 'draft') {
-        if (isMepWorkbench(workbench)) return
-        // Draft tools from shortcut while in another workbench → switch to draft
-        if (toolsForWorkbench('draft').includes(tool)) {
-          get().setWorkbench('draft')
-          get().setTool(tool)
-          return
-        }
-        return
-      }
+      // Refuse tools that don't belong to the active workbench (no cross-switch)
+      if (!toolsForWorkbench(workbench).includes(tool)) return
       set({
         tool,
         wallDraftFrom: null,
@@ -3680,6 +3658,24 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       const next = {
         ...floor,
         roomFloorMaterials:
+          Object.keys(map).length > 0 ? map : undefined,
+      }
+      set({ building: replaceFloor(get().building, next) })
+    },
+
+    setRoomCeilingMaterial: (roomKey, material) => {
+      get().pushHistory()
+      const floor = get().activeFloor()
+      if (floorPlateIdFromKey(roomKey) || roomKey.startsWith('opening:')) return
+      const map = { ...(floor.roomCeilingMaterials ?? {}) }
+      if (material == null) {
+        delete map[roomKey]
+      } else {
+        map[roomKey] = material
+      }
+      const next = {
+        ...floor,
+        roomCeilingMaterials:
           Object.keys(map).length > 0 ? map : undefined,
       }
       set({ building: replaceFloor(get().building, next) })

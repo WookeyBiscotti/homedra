@@ -24,9 +24,13 @@ import {
 } from '../../engine/extrude'
 import { useRefMemo } from '../../hooks/useRefMemo'
 import { floorPaintRegions } from '../../engine/geometry/floorPaint'
-import { resolveFloorRegionMaterial } from '../../engine/geometry/floorPlates'
+import {
+  resolveCeilingRegionMaterial,
+  resolveFloorRegionMaterial,
+} from '../../engine/geometry/floorPlates'
 import { floorSlabOpeningHoles } from '../../engine/geometry/slabOpenings'
 import {
+  buildRoomCeilingGeometry,
   buildRoomFloorGeometry,
   FLOOR_FINISH_Y_OFFSET,
 } from '../../engine/geometry/wallFaces'
@@ -358,9 +362,15 @@ function WallSolidPartMesh({
     live ? s.building.floors.find((f) => f.id === floorId) : undefined,
   )
   const wall = floor?.walls.find((w) => w.id === part.wallId)
+  // R3F skips `raycast={undefined}`, so a mesh that once used disableRaycast
+  // would keep the noop if we passed undefined for live cuts. Always set an
+  // explicit function: filtered face hit, default Mesh.raycast for cuts, or noop.
   const raycast = useMemo(() => {
-    if (!live || !floor || !wall || !paintSide) return undefined
-    return makeWallPaintRaycast(floor, wall, paintSide)
+    if (!live) return disableRaycast
+    if (paintSide && floor && wall) {
+      return makeWallPaintRaycast(floor, wall, paintSide)
+    }
+    return THREE.Mesh.prototype.raycast
   }, [live, floor, wall, paintSide])
 
   const onClick = (e: ThreeEvent<MouseEvent>) => {
@@ -383,7 +393,7 @@ function WallSolidPartMesh({
       geometry={part.geometry}
       castShadow={shadowsEnabled && !ghost}
       receiveShadow={shadowsEnabled && !ghost}
-      raycast={live ? raycast : disableRaycast}
+      raycast={raycast}
       onClick={live ? onClick : undefined}
       onPointerOver={
         live
@@ -464,7 +474,8 @@ function FloorFinishes({
         a.openings === b.openings &&
         a.slabOpenings === b.slabOpenings &&
         a.plates === b.plates &&
-        a.roomFloorMaterials === b.roomFloorMaterials
+        a.roomFloorMaterials === b.roomFloorMaterials &&
+        a.roomCeilingMaterials === b.roomCeilingMaterials
       )
     },
   )
@@ -544,12 +555,47 @@ function FloorFinishes({
     floor?.roomFloorMaterials,
   ])
 
+  const roomCeilings = useMemo(() => {
+    if (!floor || !isStoryFloor(floor)) return []
+    const regions = floorPaintRegions(floor)
+    const holes = floorSlabOpeningHoles(floor)
+    const out: Array<{
+      key: string
+      geo: THREE.BufferGeometry
+      mat: NonNullable<ReturnType<typeof resolveCeilingRegionMaterial>>
+    }> = []
+    for (const region of regions) {
+      if (!region.room) continue
+      const mat = resolveCeilingRegionMaterial(floor, region.key)
+      if (!mat) continue
+      const geo = buildRoomCeilingGeometry(
+        region.polygon,
+        floor.elevation,
+        floor.height,
+        { holes },
+      )
+      if (!geo) continue
+      out.push({ key: region.key, geo, mat })
+    }
+    return out
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- structural fields only
+  }, [
+    floor?.kind,
+    floor?.elevation,
+    floor?.height,
+    floor?.vertices,
+    floor?.walls,
+    floor?.slabOpenings,
+    floor?.roomCeilingMaterials,
+  ])
+
   useEffect(() => {
     return () => {
       for (const item of slabCuts) item.geo.dispose()
       for (const item of roomFloors) item.geo.dispose()
+      for (const item of roomCeilings) item.geo.dispose()
     }
-  }, [slabCuts, roomFloors])
+  }, [slabCuts, roomFloors, roomCeilings])
 
   if (!floor) return null
   const dimmed = ghost
@@ -645,6 +691,49 @@ function FloorFinishes({
             transparent={dimmed}
             opacity={dimmed ? 0.45 : 1}
             side={THREE.DoubleSide}
+            meterUvs
+            vertexDisplacement={false}
+          />
+        </mesh>
+      ))}
+      {roomCeilings.map(({ key, geo, mat }) => (
+        <mesh
+          key={`ceil-${key}`}
+          geometry={geo}
+          receiveShadow={shadowsEnabled}
+          raycast={blockHits ? disableRaycast : undefined}
+          onClick={
+            blockHits
+              ? undefined
+              : (e: ThreeEvent<MouseEvent>) => {
+                  e.stopPropagation()
+                  setActiveFloor(floorId)
+                  setSelection({ kind: 'room', key })
+                }
+          }
+          onPointerOver={
+            blockHits
+              ? undefined
+              : (e) => {
+                  e.stopPropagation()
+                  document.body.style.cursor = 'pointer'
+                }
+          }
+          onPointerOut={
+            blockHits
+              ? undefined
+              : () => {
+                  document.body.style.cursor = 'default'
+                }
+          }
+          renderOrder={2}
+        >
+          <PbrStandardMaterial
+            material={mat}
+            color="#e8dfd0"
+            transparent={dimmed}
+            opacity={dimmed ? 0.45 : 1}
+            side={THREE.FrontSide}
             meterUvs
             vertexDisplacement={false}
           />

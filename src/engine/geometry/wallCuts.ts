@@ -240,9 +240,49 @@ function pushOpeningReveals(
     outward: rightOut,
   })
 
-  // Sill (top of wall under opening) — skip flush-to-floor doors
+  appendOpeningHorizontalCutQuads(
+    floor,
+    wall,
+    opening,
+    positions,
+    normals,
+    uvs,
+    indices,
+  )
+}
+
+/**
+ * Sill + head quads for an opening (into the void). Used by solid paint so
+ * horizontal reveals stay pickable even when extrusion caps triangulate poorly.
+ */
+export function appendOpeningHorizontalCutQuads(
+  floor: Floor,
+  wall: Wall,
+  opening: Opening,
+  positions: number[],
+  normals: number[],
+  uvs: number[],
+  indices: number[],
+): void {
+  const ends = wallEndpoints(floor, wall)
+  const axes = wallAxes(floor, wall)
+  if (!ends || !axes || ends.len < 1e-9) return
+
+  const span = openingSpan(opening)
+  const halfT = wall.thickness / 2
+  const ySill = floor.elevation + Math.max(0, opening.sillHeight)
+  const yHead = floor.elevation + Math.min(
+    floor.height,
+    opening.sillHeight + opening.height,
+  )
+  if (yHead - ySill < 1e-4) return
+
+  const along = (s: number, n: number): Pt => ({
+    x: ends.a.x + axes.ux * s + axes.nx * n,
+    y: ends.a.y + axes.uy * s + axes.ny * n,
+  })
+
   if (opening.sillHeight > 1e-3) {
-    const y = ySill + CUT_OUTSET
     pushHorizontalPlanQuad({
       positions,
       normals,
@@ -252,14 +292,12 @@ function pushOpeningReveals(
       p10: along(span.end, -halfT),
       p11: along(span.end, halfT),
       p01: along(span.start, halfT),
-      y,
+      y: ySill + CUT_OUTSET,
       normalY: 1,
     })
   }
 
-  // Head (underside above opening) — skip full-height passages
   if (opening.sillHeight + opening.height < floor.height - 1e-3) {
-    const y = yHead - CUT_OUTSET
     pushHorizontalPlanQuad({
       positions,
       normals,
@@ -269,7 +307,7 @@ function pushOpeningReveals(
       p10: along(span.end, -halfT),
       p11: along(span.end, halfT),
       p01: along(span.start, halfT),
-      y,
+      y: yHead - CUT_OUTSET,
       normalY: -1,
     })
   }

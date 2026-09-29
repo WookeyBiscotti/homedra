@@ -181,38 +181,28 @@ export function applyFloorCopy(
 
   const remapTiles = (wallMap: Map<string, string> | null): PlacedTile[] => {
     if (!options.tiles) return target.tiles ?? []
-    return (source.tiles ?? [])
-      .map((t) => {
-        if (t.surface.type === 'wall') {
-          const wallId = wallMap?.get(t.surface.wallId)
-          if (!wallId) return null
-          return {
-            ...t,
-            id: createId('tile'),
-            material: { ...t.material },
-            surface: { ...t.surface, wallId },
-            clip: t.clip?.map((p) => ({ ...p })),
-          }
-        }
-        if (t.surface.type === 'box') {
-          const boxId = boxIdMap.get(t.surface.boxId)
-          if (!boxId) return null
-          return {
-            ...t,
-            id: createId('tile'),
-            material: { ...t.material },
-            surface: { ...t.surface, boxId },
-            clip: t.clip?.map((p) => ({ ...p })),
-          }
-        }
-        return {
-          ...t,
-          id: createId('tile'),
-          material: { ...t.material },
-          clip: t.clip?.map((p) => ({ ...p })),
-        }
-      })
-      .filter((t): t is PlacedTile => t !== null)
+    const out: PlacedTile[] = []
+    for (const t of source.tiles ?? []) {
+      let surface = t.surface
+      if (surface.type === 'wall') {
+        const wallId = wallMap?.get(surface.wallId)
+        if (!wallId) continue
+        surface = { ...surface, wallId }
+      } else if (surface.type === 'box') {
+        const boxId = boxIdMap.get(surface.boxId)
+        if (!boxId) continue
+        surface = { ...surface, boxId }
+      }
+      const next: PlacedTile = {
+        ...t,
+        id: createId('tile'),
+        material: { ...t.material },
+        surface,
+      }
+      if (t.clip) next.clip = t.clip.map((p) => ({ ...p }))
+      out.push(next)
+    }
+    return out
   }
 
   if (!copyWalls) {

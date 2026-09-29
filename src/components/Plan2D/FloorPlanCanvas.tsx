@@ -169,7 +169,8 @@ function tilePatternProps(
   return {
     fill: '#ffffff',
     fillPriority: 'pattern' as const,
-    fillPatternImage: stamp,
+    // Konva accepts canvas patterns at runtime; typings only list HTMLImageElement.
+    fillPatternImage: stamp as HTMLImageElement,
     fillPatternX: originX,
     fillPatternY: originY,
     fillPatternScaleX: scaleX,

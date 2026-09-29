@@ -63,7 +63,7 @@ export function keepMaterialLook(
   const out: MaterialRef = { ...next }
   for (const key of MATERIAL_LOOK_KEYS) {
     const value = from[key]
-    if (value !== undefined) (out as Record<string, unknown>)[key] = value
+    if (value !== undefined) Object.assign(out, { [key]: value })
   }
   return out
 }
@@ -459,6 +459,8 @@ export interface Floor {
   tiles?: PlacedTile[]
   /** Room key (closed wall cycle) → floor finish. */
   roomFloorMaterials?: Record<string, MaterialRef>
+  /** Room key → ceiling finish. */
+  roomCeilingMaterials?: Record<string, MaterialRef>
   /** Placed 3D objects (furniture / props) on this floor. */
   objects?: PlacedObject[]
   /** Plumbing graph (water / sewage / gas). */
