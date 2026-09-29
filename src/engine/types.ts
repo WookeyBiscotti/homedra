@@ -457,6 +457,8 @@ export interface Floor {
   boxCutouts?: VolumeCutout[]
   /** Discrete tiles laid on floors, walls, or box faces. */
   tiles?: PlacedTile[]
+  /** Skirting boards / cove moldings along wall faces. */
+  moldings?: PlacedMolding[]
   /** Room key (closed wall cycle) → floor finish. */
   roomFloorMaterials?: Record<string, MaterialRef>
   /** Room key → ceiling finish. */
@@ -917,6 +919,131 @@ export function normalizePlacedTile(
   }
 }
 
+/** Плинтус (пол) или галтель (потолок). */
+export type MoldingKind = 'skirting' | 'cove'
+
+export type MoldingVertex = { x: number; y: number }
+
+/**
+ * DXF-style bulge on the segment from vertex i → (i+1)%n.
+ * 0 = straight; nonzero = circular arc (tan(includedAngle/4), sign = side).
+ */
+export type MoldingSegment = { bulge: number }
+
+/** Closed cross-section: N vertices and N segments. Units: meters. */
+export type MoldingProfile = {
+  vertices: MoldingVertex[]
+  segments: MoldingSegment[]
+}
+
+/** Catalog / editor spec for a molding profile. */
+export interface MoldingSpec {
+  name: string
+  kind: MoldingKind
+  profile: MoldingProfile
+  material: MaterialRef
+}
+
+/** One installed molding plank along a wall face interval. */
+export interface PlacedMolding extends MoldingSpec {
+  id: Id
+  wallId: Id
+  side: WallSide
+  /** Along-face U of the start (meters from face origin). */
+  s0: number
+  /** Along-face U of the end. */
+  s1: number
+  /** Horizontal miter at start (radians from perpendicular cut). */
+  miterStart?: number
+  /** Horizontal miter at end. */
+  miterEnd?: number
+}
+
+export function defaultMoldingProfile(kind: MoldingKind = 'skirting'): MoldingProfile {
+  if (kind === 'cove') {
+    // Small cove: 40×40 mm quarter-ish with a bulge on the hypotenuse.
+    return {
+      vertices: [
+        { x: 0, y: 0 },
+        { x: 0.04, y: 0 },
+        { x: 0, y: 0.04 },
+      ],
+      segments: [{ bulge: 0 }, { bulge: -0.4142 }, { bulge: 0 }],
+    }
+  }
+  // Simple rectangular skirting 12×60 mm.
+  return {
+    vertices: [
+      { x: 0, y: 0 },
+      { x: 0.012, y: 0 },
+      { x: 0.012, y: 0.06 },
+      { x: 0, y: 0.06 },
+    ],
+    segments: [{ bulge: 0 }, { bulge: 0 }, { bulge: 0 }, { bulge: 0 }],
+  }
+}
+
+export function defaultMoldingSpec(kind: MoldingKind = 'skirting'): MoldingSpec {
+  return {
+    name: kind === 'cove' ? 'Галтель' : 'Плинтус',
+    kind,
+    profile: defaultMoldingProfile(kind),
+    material: defaultMaterialRef('WoodFloor043', 0.4),
+  }
+}
+
+export function normalizeMoldingProfile(
+  raw: Partial<MoldingProfile> | null | undefined,
+  kind: MoldingKind = 'skirting',
+): MoldingProfile {
+  const fallback = defaultMoldingProfile(kind)
+  const verts = Array.isArray(raw?.vertices)
+    ? raw!.vertices.map((p) => ({
+        x: Number(p.x) || 0,
+        y: Number(p.y) || 0,
+      }))
+    : fallback.vertices
+  if (verts.length < 3) return fallback
+  const segs = Array.isArray(raw?.segments) ? raw!.segments : []
+  const segments: MoldingSegment[] = verts.map((_, i) => ({
+    bulge: Number(segs[i]?.bulge) || 0,
+  }))
+  return { vertices: verts, segments }
+}
+
+export function normalizePlacedMolding(
+  raw: Partial<PlacedMolding> & { id?: Id },
+): PlacedMolding {
+  const kind: MoldingKind = raw.kind === 'cove' ? 'cove' : 'skirting'
+  const s0 = Number(raw.s0) || 0
+  const s1 = Number(raw.s1) || 0
+  return {
+    id: raw.id ?? createId('mold'),
+    name:
+      (raw.name ?? (kind === 'cove' ? 'Галтель' : 'Плинтус')).trim() ||
+      (kind === 'cove' ? 'Галтель' : 'Плинтус'),
+    kind,
+    profile: normalizeMoldingProfile(raw.profile, kind),
+    material: raw.material ?? defaultMaterialRef('WoodFloor043', 0.4),
+    wallId: raw.wallId ?? '',
+    side: raw.side === 'neg' ? 'neg' : 'pos',
+    s0: Math.min(s0, s1),
+    s1: Math.max(s0, s1),
+    miterStart:
+      raw.miterStart !== undefined && Number.isFinite(Number(raw.miterStart))
+        ? Number(raw.miterStart)
+        : undefined,
+    miterEnd:
+      raw.miterEnd !== undefined && Number.isFinite(Number(raw.miterEnd))
+        ? Number(raw.miterEnd)
+        : undefined,
+  }
+}
+
+export function moldingKindLabel(kind: MoldingKind): string {
+  return kind === 'cove' ? 'Галтель' : 'Плинтус'
+}
+
 export function tileSurfaceLabel(surface: TileSurface): string {
   switch (surface.type) {
     case 'floor':
@@ -941,6 +1068,8 @@ export type Tool =
   | 'placeTile'
   | 'fillTile'
   | 'cutTile'
+  | 'placeMolding'
+  | 'fillMolding'
   | 'placeObject'
   | 'lockLength'
   | 'lockPoint'
@@ -971,6 +1100,7 @@ export type SceneMode = 'interior' | 'exterior' | 'visit' | 'paint'
  * - electrical: cables, outlets, switches, panels
  * - landscape: site sculpt, ground paint, plants, grass
  * - tiling: lay ceramic tiles on floors, walls, and boxes
+ * - decor: skirting boards and cove moldings along wall edges
  */
 export type Workbench =
   | 'draft'
@@ -980,6 +1110,7 @@ export type Workbench =
   | 'electrical'
   | 'landscape'
   | 'tiling'
+  | 'decor'
 
 export const DRAFT_TOOLS: readonly Tool[] = [
   'select',
@@ -1031,6 +1162,12 @@ export const TILING_TOOLS: readonly Tool[] = [
   'cutTile',
 ]
 
+export const DECOR_TOOLS: readonly Tool[] = [
+  'select',
+  'placeMolding',
+  'fillMolding',
+]
+
 export function toolsForWorkbench(workbench: Workbench): readonly Tool[] {
   switch (workbench) {
     case 'draft':
@@ -1047,6 +1184,8 @@ export function toolsForWorkbench(workbench: Workbench): readonly Tool[] {
       return LANDSCAPE_TOOLS
     case 'tiling':
       return TILING_TOOLS
+    case 'decor':
+      return DECOR_TOOLS
   }
 }
 
@@ -1103,6 +1242,14 @@ export function isTilingTool(tool: Tool): boolean {
 
 export function isTilingWorkbench(workbench: Workbench): boolean {
   return workbench === 'tiling'
+}
+
+export function isDecorTool(tool: Tool): boolean {
+  return tool === 'placeMolding' || tool === 'fillMolding'
+}
+
+export function isDecorWorkbench(workbench: Workbench): boolean {
+  return workbench === 'decor'
 }
 
 /** Global / sun lighting for the 3D viewport (not part of building JSON). */
@@ -1168,6 +1315,8 @@ export type Selection =
   | { kind: 'volumeCutout'; id: Id }
   | { kind: 'tile'; id: Id }
   | { kind: 'tiles'; ids: Id[] }
+  | { kind: 'molding'; id: Id }
+  | { kind: 'moldings'; ids: Id[] }
   | { kind: 'object'; id: Id }
   | { kind: 'plant'; id: Id }
   | { kind: 'pipeSegment'; id: Id }
@@ -1296,6 +1445,31 @@ export function tileSelectionOf(ids: Id[]): Selection {
   return { kind: 'tiles', ids: unique }
 }
 
+export function isMoldingSelected(selection: Selection, id: Id): boolean {
+  if (!selection) return false
+  if (selection.kind === 'molding') return selection.id === id
+  if (selection.kind === 'moldings') return selection.ids.includes(id)
+  return false
+}
+
+export function selectedMoldingIds(selection: Selection): Id[] {
+  if (!selection) return []
+  if (selection.kind === 'molding') return [selection.id]
+  if (selection.kind === 'moldings') return selection.ids
+  return []
+}
+
+export function selectedMoldingId(selection: Selection): Id | null {
+  return selectedMoldingIds(selection)[0] ?? null
+}
+
+export function moldingSelectionOf(ids: Id[]): Selection {
+  const unique = [...new Set(ids)]
+  if (unique.length === 0) return null
+  if (unique.length === 1) return { kind: 'molding', id: unique[0]! }
+  return { kind: 'moldings', ids: unique }
+}
+
 export function selectedOpeningId(selection: Selection): Id | null {
   return selection?.kind === 'opening' ? selection.id : null
 }
@@ -1363,6 +1537,7 @@ export function createEmptyFloor(
     boxes: [],
     boxCutouts: [],
     tiles: [],
+    moldings: [],
     objects: [],
     pipes: emptyPipeNetwork(),
     cables: emptyCableNetwork(),
@@ -1610,6 +1785,7 @@ export function ensureFloorOpenings(floor: Floor): Floor {
     boxes: floor.boxes ?? [],
     boxCutouts: floor.boxCutouts ?? [],
     tiles: (floor.tiles ?? []).map((t) => normalizePlacedTile(t)),
+    moldings: (floor.moldings ?? []).map((m) => normalizePlacedMolding(m)),
     objects: (floor.objects ?? []).map((o) =>
       normalizePlacedObject(o as PlacedObject & { scale?: number }),
     ),

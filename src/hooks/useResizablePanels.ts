@@ -11,6 +11,7 @@ const DEFAULT_RAIL: Record<Workbench, number> = {
   electrical: 220,
   landscape: 280,
   tiling: 240,
+  decor: 260,
 }
 
 const DEFAULT_PROPS = 240

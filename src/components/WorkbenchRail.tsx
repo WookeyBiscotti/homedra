@@ -6,6 +6,7 @@ import { PlumbingWorkbench } from './PlumbingWorkbench'
 import { Toolbar } from './Toolbar'
 import { PaintWorkbench } from './View3D/PaintWorkbench'
 import { TileWorkbench } from './TileWorkbench'
+import { DecorWorkbench } from './DecorWorkbench'
 
 /** Left rail content for the active FreeCAD-style workbench. */
 export function WorkbenchRail() {
@@ -24,6 +25,8 @@ export function WorkbenchRail() {
       return <LandscapeWorkbench />
     case 'tiling':
       return <TileWorkbench />
+    case 'decor':
+      return <DecorWorkbench />
     case 'draft':
     default:
       return <Toolbar />

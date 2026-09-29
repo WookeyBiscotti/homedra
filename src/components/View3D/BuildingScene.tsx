@@ -68,6 +68,10 @@ import { WallPickables } from './WallPickables'
 import { FloorVolumeBoxes } from './VolumeBoxes'
 import { PlaceObjectFloorHit, PlacedObjects } from './PlacedObjects'
 import { FloorPlacedTiles, TileLayPickables } from './PlacedTiles'
+import {
+  FloorPlacedMoldings,
+  MoldingLayPickables,
+} from './PlacedMoldings'
 import { MepNetworks } from './MepNetworks'
 import { TerrainGround } from './TerrainGround'
 import { LandscapePlants } from './LandscapePlants'
@@ -200,10 +204,12 @@ function pickPriority(kind: string | undefined): number {
 function PointerEventFilter({
   painting,
   tiling,
+  decor,
   furnish,
 }: {
   painting: boolean
   tiling: boolean
+  decor: boolean
   furnish: boolean
 }) {
   const setEvents = useThree((s) => s.setEvents)
@@ -214,7 +220,21 @@ function PointerEventFilter({
       })
     } else if (tiling) {
       setEvents({
-        filter: (hits) => hits.filter((h) => h.object.userData?.tileTarget || h.object.userData?.pickKind === 'tile'),
+        filter: (hits) =>
+          hits.filter(
+            (h) =>
+              h.object.userData?.tileTarget ||
+              h.object.userData?.pickKind === 'tile',
+          ),
+      })
+    } else if (decor) {
+      setEvents({
+        filter: (hits) =>
+          hits.filter(
+            (h) =>
+              h.object.userData?.moldingTarget ||
+              h.object.userData?.pickKind === 'molding',
+          ),
       })
     } else {
       setEvents({
@@ -235,7 +255,7 @@ function PointerEventFilter({
       })
     }
     return () => setEvents({ filter: (hits) => hits })
-  }, [painting, tiling, furnish, setEvents])
+  }, [painting, tiling, decor, furnish, setEvents])
   return null
 }
 
@@ -956,6 +976,11 @@ function SceneContent({
     !painting &&
     workbench === 'tiling' &&
     (tool === 'placeTile' || tool === 'fillTile')
+  const decorLay =
+    !visit &&
+    !painting &&
+    workbench === 'decor' &&
+    (tool === 'placeMolding' || tool === 'fillMolding')
   const landscaping =
     !visit && !painting && workbench === 'landscape'
   const routing =
@@ -1070,6 +1095,7 @@ function SceneContent({
       <PointerEventFilter
         painting={painting}
         tiling={tilingLay}
+        decor={decorLay}
         furnish={workbench === 'furnish'}
       />
       <color attach="background" args={[lighting.skyColor]} />
@@ -1162,7 +1188,7 @@ function SceneContent({
                 floor={floorData}
                 dimmed={ghost || floorData.id !== activeFloorId}
                 shadowsEnabled={lighting.shadowsEnabled}
-                pickable={!painting && !placing && !routing && !landscaping && !tilingLay}
+                pickable={!painting && !placing && !routing && !landscaping && !tilingLay && !decorLay}
               />
             )}
             {painting && f.floorId === activeFloorId && (
@@ -1184,6 +1210,20 @@ function SceneContent({
               />
             )}
             {floorData && (
+              <FloorPlacedMoldings
+                floor={floorData}
+                dimmed={ghost || floorData.id !== activeFloorId}
+                shadowsEnabled={lighting.shadowsEnabled}
+                pickable={
+                  !painting &&
+                  !placing &&
+                  !routing &&
+                  !landscaping &&
+                  workbench === 'decor'
+                }
+              />
+            )}
+            {floorData && (
               <PlacedObjects
                 floor={floorData}
                 shadowsEnabled={lighting.shadowsEnabled}
@@ -1197,13 +1237,14 @@ function SceneContent({
           activeFloorId={activeFloorId}
           shadowsEnabled={lighting.shadowsEnabled}
           visibilityByFloor={visibilityByFloor}
-          pickable={!painting && !placing && !routing && !landscaping && !tilingLay}
+          pickable={!painting && !placing && !routing && !landscaping && !tilingLay && !decorLay}
         />
         {!visit &&
           !painting &&
           !placing &&
           !routing &&
           !tilingLay &&
+          !decorLay &&
           workbench !== 'landscape' && <WallPickables />}
         {!visit &&
           !painting &&
@@ -1211,7 +1252,8 @@ function SceneContent({
           !routing &&
           workbench !== 'landscape' &&
           workbench !== 'furnish' &&
-          !tilingLay && (
+          !tilingLay &&
+          !decorLay && (
           <OpeningPickables showSlabs />
         )}
         {!visit &&
@@ -1236,6 +1278,9 @@ function SceneContent({
         )}
         {tilingLay && activeFloor && activeFloor.kind !== 'ground' && (
           <TileLayPickables floor={activeFloor} />
+        )}
+        {decorLay && activeFloor && activeFloor.kind !== 'ground' && (
+          <MoldingLayPickables floor={activeFloor} />
         )}
       </group>
 

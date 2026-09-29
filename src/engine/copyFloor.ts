@@ -14,6 +14,7 @@ import {
   type SlabOpening,
   type Vertex,
   type PlacedTile,
+  type PlacedMolding,
   type VolumeBox,
   type VolumeCutout,
   type Wall,
@@ -31,6 +32,7 @@ export interface CopyFloorOptions {
   pipes: boolean
   cables: boolean
   tiles: boolean
+  moldings: boolean
 }
 
 export const DEFAULT_COPY_FLOOR_OPTIONS: CopyFloorOptions = {
@@ -45,6 +47,7 @@ export const DEFAULT_COPY_FLOOR_OPTIONS: CopyFloorOptions = {
   pipes: true,
   cables: true,
   tiles: true,
+  moldings: true,
 }
 
 function openingKindSelected(
@@ -127,7 +130,8 @@ export function copyFloorNeedsWalls(options: CopyFloorOptions): boolean {
     options.constraints ||
     options.doors ||
     options.windows ||
-    options.passages
+    options.passages ||
+    options.moldings
   )
 }
 
@@ -205,6 +209,29 @@ export function applyFloorCopy(
     return out
   }
 
+  const remapMoldings = (
+    wallMap: Map<string, string> | null,
+  ): PlacedMolding[] => {
+    if (!options.moldings) return target.moldings ?? []
+    if (!wallMap) return target.moldings ?? []
+    const out: PlacedMolding[] = []
+    for (const m of source.moldings ?? []) {
+      const wallId = wallMap.get(m.wallId)
+      if (!wallId) continue
+      out.push({
+        ...m,
+        id: createId('mold'),
+        wallId,
+        material: { ...m.material },
+        profile: {
+          vertices: m.profile.vertices.map((p) => ({ ...p })),
+          segments: m.profile.segments.map((s) => ({ ...s })),
+        },
+      })
+    }
+    return out
+  }
+
   if (!copyWalls) {
     return {
       ...target,
@@ -213,6 +240,7 @@ export function applyFloorCopy(
       boxes: options.boxes ? boxes : (target.boxes ?? []),
       boxCutouts: options.boxes ? boxCutouts : (target.boxCutouts ?? []),
       tiles: remapTiles(null),
+      moldings: target.moldings ?? [],
       pipes: options.pipes ? copyPipeNetwork(source, null) : (target.pipes ?? emptyPipeNetwork()),
       cables: options.cables
         ? copyCableNetwork(source, null)
@@ -267,6 +295,7 @@ export function applyFloorCopy(
     boxes: options.boxes ? boxes : [],
     boxCutouts: options.boxes ? boxCutouts : [],
     tiles: remapTiles(wallMap),
+    moldings: remapMoldings(wallMap),
     pipes: options.pipes
       ? copyPipeNetwork(source, wallMap)
       : (target.pipes ?? emptyPipeNetwork()),

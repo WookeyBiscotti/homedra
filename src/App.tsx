@@ -303,6 +303,19 @@ export default function App() {
         }
         return
       }
+      if (!mod && workbench === 'decor') {
+        const decorKeys: Record<string, Tool> = {
+          v: 'select',
+          t: 'placeMolding',
+          f: 'fillMolding',
+        }
+        const t = decorKeys[key]
+        if (t) {
+          e.preventDefault()
+          setTool(t)
+        }
+        return
+      }
       if (!mod && workbench === 'electrical') {
         const electricalKeys: Record<string, Tool> = {
           v: 'select',

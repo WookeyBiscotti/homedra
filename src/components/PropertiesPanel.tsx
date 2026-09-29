@@ -16,7 +16,7 @@ import {
   wallsShareAxis,
   type WallFace,
 } from '../engine/geometry/wallSolid'
-import { selectedVertexIds, selectedWallIds, selectedTileIds, openingKindLabel, slabOpeningKindLabel, isGroundFloor, isStoryFloor, wallLength, PIPE_MEDIUM_META, electricalDeviceLabel, electricalDeviceSize, ensureCableNetwork, ensurePipeNetwork, pipeFixtureLabel, pipeMediumLabel, tileSurfaceLabel, defaultTileSpec, defaultTileTexRegion, keepMaterialLook, placedObjectWorldSize, scaleForWorldSize, type PipeMedium, type WallSide } from '../engine/types'
+import { selectedVertexIds, selectedWallIds, selectedTileIds, selectedMoldingIds, openingKindLabel, slabOpeningKindLabel, isGroundFloor, isStoryFloor, wallLength, PIPE_MEDIUM_META, electricalDeviceLabel, electricalDeviceSize, ensureCableNetwork, ensurePipeNetwork, pipeFixtureLabel, pipeMediumLabel, tileSurfaceLabel, moldingKindLabel, defaultTileSpec, defaultTileTexRegion, keepMaterialLook, placedObjectWorldSize, scaleForWorldSize, type PipeMedium, type WallSide } from '../engine/types'
 import { segmentEmbed, segmentLength } from '../engine/geometry/mep'
 import { useBuildingStore } from '../store/buildingStore'
 import { resolvePlantShape } from '../landscape/plantShape'
@@ -97,6 +97,7 @@ export function PropertiesPanel() {
   const isElectrical = workbench === 'electrical'
   const isLandscape = workbench === 'landscape'
   const isTiling = workbench === 'tiling'
+  const isDecor = workbench === 'decor'
 
   const stories = building.floors.filter(isStoryFloor)
   const ground = building.floors.find(isGroundFloor)
@@ -141,6 +142,11 @@ export function PropertiesPanel() {
     : null
   const updateTile = useBuildingStore((s) => s.updateTile)
   const resetTileClip = useBuildingStore((s) => s.resetTileClip)
+  const moldingIds = selectedMoldingIds(selection)
+  const placedMolding = moldingIds[0]
+    ? (floor.moldings ?? []).find((m) => m.id === moldingIds[0]) ?? null
+    : null
+  const updateMolding = useBuildingStore((s) => s.updateMolding)
   const placedObject =
     selection?.kind === 'object'
       ? (floor.objects ?? []).find((o) => o.id === selection.id)
@@ -307,6 +313,8 @@ export function PropertiesPanel() {
             ? 'Объект'
             : isTiling
               ? 'Плитка'
+              : isDecor
+                ? 'Декор'
               : isPlumbing
               ? 'Трубы'
               : isElectrical
@@ -821,7 +829,7 @@ export function PropertiesPanel() {
         </p>
       )}
 
-      {((!isGround && (isDraft || isPaint || isFurnish || isTiling)) ||
+      {((!isGround && (isDraft || isPaint || isFurnish || isTiling || isDecor)) ||
         (isFurnish && placedObject)) && (
         <>
       {isDraft && slabOpening && (
@@ -1333,6 +1341,54 @@ export function PropertiesPanel() {
               Сбросить подрезку
             </button>
           )}
+        </section>
+      )}
+
+      {isDecor && placedMolding && (
+        <section className="prop-section">
+          <h3>{moldingKindLabel(placedMolding.kind)}</h3>
+          {moldingIds.length > 1 && (
+            <p className="muted">Выбрано планок: {moldingIds.length}</p>
+          )}
+          <label>
+            Название
+            <input
+              type="text"
+              value={placedMolding.name}
+              onChange={(e) =>
+                updateMolding(placedMolding.id, { name: e.target.value })
+              }
+            />
+          </label>
+          <p className="muted">
+            Длина {(placedMolding.s1 - placedMolding.s0).toFixed(2)} м
+          </p>
+          <MaterialSlot
+            label="Текстура"
+            value={placedMolding.material}
+            showRepeat
+            onChange={(material) =>
+              updateMolding(placedMolding.id, {
+                material: keepMaterialLook(placedMolding.material, material),
+              })
+            }
+            onClear={() =>
+              updateMolding(placedMolding.id, {
+                material: keepMaterialLook(
+                  placedMolding.material,
+                  defaultTileSpec().material,
+                ),
+              })
+            }
+          />
+          <p className="tool-group-title">PBR</p>
+          <MaterialPbrFields
+            value={placedMolding.material}
+            onCommit={() => pushHistory()}
+            onChange={(material) =>
+              updateMolding(placedMolding.id, { material }, { history: false })
+            }
+          />
         </section>
       )}
 

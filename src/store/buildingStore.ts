@@ -75,6 +75,8 @@ import {
   PIPE_MEDIUM_META,
   type PlacedObject,
   type PlacedTile,
+  type MoldingSpec,
+  type PlacedMolding,
   type TileFillPattern,
   type TileSpec,
   type TileSurface,
@@ -87,9 +89,11 @@ import {
   type Selection,
   sameTileSurface,
   selectedTileIds,
+  selectedMoldingIds,
   selectedVertexIds,
   selectedWallIds,
   tileSelectionOf,
+  moldingSelectionOf,
   storyFloors,
   type Tool,
   type TransformGizmoMode,
@@ -147,6 +151,14 @@ import {
   removeTilesForWall,
   updateTileFields,
 } from '../engine/geometry/tiles'
+import {
+  addMoldingsReplacing,
+  fillRoomMoldings,
+  placeMoldingAtFaceU,
+  removeMolding,
+  removeMoldings,
+  removeMoldingsForWall,
+} from '../engine/geometry/moldings'
 import { fillTilesOnSurface, layoutTile } from '../engine/geometry/tileFill'
 import {
   connectMepNodes,
@@ -471,6 +483,19 @@ interface BuildingState {
   rotateTileOrPending: () => void
   placeTileOnHit: (surface: TileSurface, u: number, v: number) => boolean
   fillTilesOnHit: (surface: TileSurface, u: number, v: number) => number
+
+  pendingMolding: MoldingSpec | null
+  setPendingMolding: (spec: MoldingSpec | null) => void
+  placeMoldingOnHit: (wallId: string, side: WallSide, u: number) => boolean
+  fillMoldingsOnRoom: (roomKey: string) => number
+  selectMolding: (floorId: string, id: string) => void
+  deleteMolding: (floorId: string, id: string) => void
+  updateMolding: (
+    id: string,
+    patch: Partial<Pick<PlacedMolding, 'name' | 'material'>>,
+    opts?: { history?: boolean },
+  ) => void
+
   updateTile: (
     id: string,
     patch: Partial<
@@ -783,6 +808,7 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
     tileFillPattern: 'straight',
     tileRotation: 0,
     tileCutDraft: null,
+    pendingMolding: null,
     pendingModel: null,
     modelBrowserOpen: false,
     collectionBrowserOpen: false,
@@ -991,6 +1017,26 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
               ? tileSel
               : null,
           pendingModel: null,
+          tileCutDraft: null,
+          modelBrowserOpen: false,
+          collectionBrowserOpen: false,
+          ...drafts,
+        })
+        return
+      }
+      if (workbench === 'decor') {
+        const moldSel = get().selection
+        set({
+          workbench,
+          viewMode: '3d',
+          sceneMode: prev === 'paint' ? 'interior' : prev,
+          tool: 'select',
+          selection:
+            moldSel?.kind === 'molding' || moldSel?.kind === 'moldings'
+              ? moldSel
+              : null,
+          pendingModel: null,
+          pendingTile: null,
           tileCutDraft: null,
           modelBrowserOpen: false,
           collectionBrowserOpen: false,
@@ -2253,6 +2299,92 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
       })
       return tiles.length
     },
+
+    setPendingMolding: (pendingMolding) => {
+      set({
+        pendingMolding,
+        tool: pendingMolding
+          ? get().tool === 'fillMolding'
+            ? get().tool
+            : 'placeMolding'
+          : get().tool,
+      })
+    },
+    placeMoldingOnHit: (wallId, side, u) => {
+      const spec = get().pendingMolding
+      if (!spec) {
+        set({ statusMessage: 'Выберите профиль в коллекции' })
+        return false
+      }
+      const floor = get().activeFloor()
+      const placed = placeMoldingAtFaceU(floor, spec, wallId, side, u)
+      if (!placed) {
+        set({ statusMessage: 'Нет свободного участка' })
+        return false
+      }
+      get().pushHistory()
+      const next = addMoldingsReplacing(get().activeFloor(), [placed])
+      set({
+        building: replaceFloor(get().building, next),
+        selection: { kind: 'molding', id: placed.id },
+        statusMessage: null,
+      })
+      return true
+    },
+    fillMoldingsOnRoom: (roomKey) => {
+      const spec = get().pendingMolding
+      if (!spec) {
+        set({ statusMessage: 'Выберите профиль в коллекции' })
+        return 0
+      }
+      const floor = get().activeFloor()
+      const moldings = fillRoomMoldings(floor, roomKey, spec)
+      if (moldings.length === 0) {
+        set({ statusMessage: 'Некуда ставить' })
+        return 0
+      }
+      get().pushHistory()
+      const next = addMoldingsReplacing(get().activeFloor(), moldings)
+      set({
+        building: replaceFloor(get().building, next),
+        selection: moldingSelectionOf(moldings.map((m) => m.id)),
+        statusMessage: `Установлено ${moldings.length}`,
+      })
+      return moldings.length
+    },
+    selectMolding: (floorId, id) => {
+      if (get().activeFloorId !== floorId) {
+        get().setActiveFloor(floorId)
+      }
+      set({ selection: { kind: 'molding', id } })
+    },
+    deleteMolding: (floorId, id) => {
+      if (get().activeFloorId !== floorId) {
+        get().setActiveFloor(floorId)
+      }
+      get().pushHistory()
+      const floor = removeMolding(get().activeFloor(), id)
+      const sel = get().selection
+      const clear =
+        (sel?.kind === 'molding' && sel.id === id) ||
+        (sel?.kind === 'moldings' && sel.ids.includes(id))
+      set({
+        building: replaceFloor(get().building, floor),
+        selection: clear ? null : sel,
+        statusMessage: null,
+      })
+    },
+    updateMolding: (id, patch, opts) => {
+      if (opts?.history !== false) get().pushHistory()
+      const floor = get().activeFloor()
+      const moldings = (floor.moldings ?? []).map((m) =>
+        m.id === id ? { ...m, ...patch } : m,
+      )
+      set({
+        building: replaceFloor(get().building, { ...floor, moldings }),
+      })
+    },
+
     updateTile: (id, patch, opts) => {
       if (opts?.history !== false) get().pushHistory()
       const next = updateTileFields(get().activeFloor(), id, patch)
@@ -4114,6 +4246,10 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         floor = removeTile(floor, selection.id)
       } else if (selection.kind === 'tiles') {
         floor = removeTiles(floor, selection.ids)
+      } else if (selection.kind === 'molding') {
+        floor = removeMolding(floor, selection.id)
+      } else if (selection.kind === 'moldings') {
+        floor = removeMoldings(floor, selection.ids)
       } else if (selection.kind === 'volumeCutout') {
         floor = removeVolumeCutout(floor, selection.id)
       } else if (selection.kind === 'object') {
@@ -4149,12 +4285,14 @@ export const useBuildingStore = create<BuildingState>((set, get) => {
         floor = { ...floor, cables: next }
       } else if (selection.kind === 'wall') {
         floor = removeTilesForWall(floor, selection.id)
+        floor = removeMoldingsForWall(floor, selection.id)
         floor = removeWall(floor, selection.id)
       } else if (selection.kind === 'vertex') {
         floor = removeVertex(floor, selection.id)
       } else if (selection.kind === 'multi') {
         for (const wid of selection.wallIds) {
           floor = removeTilesForWall(floor, wid)
+          floor = removeMoldingsForWall(floor, wid)
           floor = removeWall(floor, wid)
         }
         for (const vid of selection.vertexIds) {
